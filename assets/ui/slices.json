@@ -1,0 +1,627 @@
+{
+  "sources": {
+    "sheet-a2-corrected.png": "52dcf557d1cf4cc50a7da50d33f25be5890a0a9d15d252efb11a57fe9092069f",
+    "icons.png": "a205fc2ea3a31b1a4dd8454e827cc6a7fdced24d6b103c8aaaef0d95448d106d",
+    "vines.png": "b72398963cc87c90c37c12e2e03ca98c23d8802b0e11d041b19afed0b58a9149",
+    "backdrop.png": "40ad977675b394dc40dc22382101f3fa36cc42996bf88ca9e951d2232c512a8d",
+    "sheet-a.png": "57b85ab4b731daf1ec59bb873196e0ca87deed8c71753cbe924b6c8fe7a91c26"
+  },
+  "visual_references": {
+    "mockup-a.png": "56d0323894054a9fe261844011a04e996f506a644e849c89e978190bbe8f2ce7",
+    "sheet-a.png": "57b85ab4b731daf1ec59bb873196e0ca87deed8c71753cbe924b6c8fe7a91c26",
+    "banner.png": "161f6e944229405d8954057aa112afac51ec92dfb89fbcc72fdff2f88dbc4bdb",
+    "ref-fr-ui-kit.png": "c601a24edd69a7b18a9d5a168fc5fff23a1d8de12c5cb1500974f11d7c2dbed1"
+  },
+  "magenta_keys": {
+    "expected": "#FF00FF",
+    "sampled_corners": {
+      "sheet-a2-corrected.png": [
+        236,
+        26,
+        240
+      ],
+      "icons.png": [
+        237,
+        26,
+        240
+      ],
+      "vines.png": [
+        239,
+        26,
+        240
+      ],
+      "sheet-a.png": [
+        238,
+        25,
+        240
+      ]
+    }
+  },
+  "slices": {
+    "button_normal.png": {
+      "source": "sheet-a2-corrected.png",
+      "box": [
+        44,
+        84,
+        381,
+        183
+      ],
+      "size": [
+        337,
+        99
+      ]
+    },
+    "button_hover.png": {
+      "source": "sheet-a2-corrected.png",
+      "box": [
+        414,
+        84,
+        750,
+        183
+      ],
+      "size": [
+        336,
+        99
+      ]
+    },
+    "button_pressed.png": {
+      "source": "sheet-a2-corrected.png",
+      "box": [
+        783,
+        84,
+        1119,
+        183
+      ],
+      "size": [
+        336,
+        99
+      ]
+    },
+    "button_disabled.png": {
+      "source": "sheet-a2-corrected.png",
+      "box": [
+        1152,
+        84,
+        1492,
+        183
+      ],
+      "size": [
+        340,
+        99
+      ]
+    },
+    "play_normal.png": {
+      "source": "sheet-a2-corrected.png",
+      "box": [
+        43,
+        244,
+        440,
+        367
+      ],
+      "size": [
+        397,
+        123
+      ]
+    },
+    "play_hover.png": {
+      "source": "sheet-a2-corrected.png",
+      "box": [
+        460,
+        244,
+        858,
+        366
+      ],
+      "size": [
+        398,
+        122
+      ]
+    },
+    "tab_selected.png": {
+      "source": "sheet-a2-corrected.png",
+      "box": [
+        885,
+        252,
+        1171,
+        361
+      ],
+      "size": [
+        286,
+        109
+      ]
+    },
+    "tab_unselected.png": {
+      "source": "sheet-a2-corrected.png",
+      "box": [
+        1202,
+        251,
+        1489,
+        361
+      ],
+      "size": [
+        287,
+        110
+      ]
+    },
+    "panel.png": {
+      "source": "sheet-a2-corrected.png",
+      "box": [
+        46,
+        408,
+        612,
+        808
+      ],
+      "size": [
+        566,
+        400
+      ]
+    },
+    "list_row.png": {
+      "source": "sheet-a.png",
+      "box": [
+        707,
+        497,
+        1304,
+        601
+      ],
+      "trimmed_box": [
+        708,
+        498,
+        1303,
+        601
+      ],
+      "size": [
+        595,
+        103
+      ],
+      "sha256": "341046d1e7a7c22aa36c1b601ec4ae532d1658b2fac661d125ac11ecc44f4bcb"
+    },
+    "text_field.png": {
+      "source": "sheet-a.png",
+      "box": [
+        707,
+        659,
+        1425,
+        739
+      ],
+      "trimmed_box": [
+        708,
+        663,
+        1423,
+        737
+      ],
+      "size": [
+        715,
+        74
+      ],
+      "sha256": "4cbe7af2959788b9e9508e347f2954bff83bde371e69a8d635c1ec7583042ced"
+    },
+    "pip_online.png": {
+      "source": "sheet-a2-corrected.png",
+      "box": [
+        65,
+        861,
+        150,
+        944
+      ],
+      "size": [
+        40,
+        39
+      ]
+    },
+    "pip_pending.png": {
+      "source": "sheet-a2-corrected.png",
+      "box": [
+        219,
+        861,
+        304,
+        944
+      ],
+      "size": [
+        40,
+        39
+      ]
+    },
+    "pip_error.png": {
+      "source": "sheet-a2-corrected.png",
+      "box": [
+        383,
+        861,
+        467,
+        944
+      ],
+      "size": [
+        40,
+        40
+      ]
+    },
+    "pip_disabled.png": {
+      "source": "sheet-a2-corrected.png",
+      "box": [
+        544,
+        861,
+        630,
+        944
+      ],
+      "size": [
+        40,
+        39
+      ]
+    },
+    "close_x.png": {
+      "source": "sheet-a2-corrected.png",
+      "box": [
+        744,
+        852,
+        841,
+        949
+      ],
+      "size": [
+        64,
+        64
+      ]
+    },
+    "plank.png": {
+      "source": "sheet-a.png",
+      "box": [
+        922,
+        844,
+        1484,
+        955
+      ],
+      "trimmed_box": [
+        928,
+        850,
+        1477,
+        954
+      ],
+      "size": [
+        549,
+        104
+      ],
+      "sha256": "755d27c6aae5d6cd7c86437bd9ba82c2a9a66ebd70d695579d5c7a590b4f5f1f"
+    },
+    "icon_leaf_green.png": {
+      "source": "icons.png",
+      "box": [
+        232,
+        189,
+        570,
+        540
+      ],
+      "size": [
+        128,
+        133
+      ]
+    },
+    "icon_leaf_blue.png": {
+      "source": "icons.png",
+      "box": [
+        901,
+        189,
+        1210,
+        540
+      ],
+      "size": [
+        128,
+        145
+      ]
+    },
+    "icon_sprig_blue.png": {
+      "source": "icons.png",
+      "box": [
+        1542,
+        148,
+        1935,
+        503
+      ],
+      "size": [
+        128,
+        116
+      ]
+    },
+    "vine_1.png": {
+      "source": "vines.png",
+      "box": [
+        58,
+        108,
+        753,
+        410
+      ],
+      "size": [
+        400,
+        174
+      ],
+      "root": [
+        10,
+        161
+      ],
+      "disconnected_pixels_removed": 10
+    },
+    "vine_2.png": {
+      "source": "vines.png",
+      "box": [
+        840,
+        83,
+        1476,
+        453
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "root": [
+        11,
+        180
+      ],
+      "disconnected_pixels_removed": 8
+    },
+    "vine_3.png": {
+      "source": "vines.png",
+      "box": [
+        56,
+        557,
+        746,
+        853
+      ],
+      "size": [
+        400,
+        172
+      ],
+      "root": [
+        8,
+        161
+      ],
+      "disconnected_pixels_removed": 39
+    },
+    "vine_4.png": {
+      "source": "vines.png",
+      "box": [
+        795,
+        519,
+        1478,
+        919
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "root": [
+        9,
+        189
+      ],
+      "disconnected_pixels_removed": 9
+    },
+    "backdrop.png": {
+      "source": "backdrop.png",
+      "box": [
+        0,
+        0,
+        1672,
+        941
+      ],
+      "size": [
+        1280,
+        720
+      ],
+      "fit": "cover"
+    }
+  },
+  "normalized_atlas": {
+    "path": "sheet-a2.png",
+    "size": [
+      1536,
+      1024
+    ],
+    "minimum_gutter_px": 48,
+    "placements": {
+      "button_normal": [
+        16,
+        36
+      ],
+      "button_hover": [
+        404,
+        36
+      ],
+      "button_pressed": [
+        792,
+        36
+      ],
+      "button_disabled": [
+        1178,
+        36
+      ],
+      "play_normal": [
+        8,
+        202
+      ],
+      "play_hover": [
+        455,
+        202
+      ],
+      "tab_selected": [
+        902,
+        209
+      ],
+      "tab_unselected": [
+        1238,
+        208
+      ],
+      "panel": [
+        24,
+        375
+      ],
+      "list_row": [
+        640,
+        510
+      ],
+      "text_field": [
+        760,
+        760
+      ],
+      "pip_online": [
+        141,
+        910
+      ],
+      "pip_pending": [
+        276,
+        910
+      ],
+      "pip_error": [
+        412,
+        910
+      ],
+      "pip_disabled": [
+        547,
+        910
+      ],
+      "close_x": [
+        683,
+        910
+      ],
+      "plank": [
+        831,
+        910
+      ]
+    },
+    "superseded_assets": [
+      "list_row",
+      "text_field",
+      "plank"
+    ],
+    "note": "Historical W98 atlas; the listed quiet controls were resliced from sheet-a.png for W112."
+  },
+  "nine_slice": {
+    "quiet": {
+      "list_row.png": {
+        "corner_px": [
+          48,
+          17
+        ],
+        "center_box": [
+          48,
+          17,
+          547,
+          86
+        ],
+        "rim": "smooth bevel"
+      },
+      "text_field.png": {
+        "corner_px": [
+          24,
+          16
+        ],
+        "center_box": [
+          24,
+          16,
+          691,
+          58
+        ],
+        "rim": "smooth bevel"
+      },
+      "plank.png": {
+        "corner_px": [
+          60,
+          32
+        ],
+        "center_box": [
+          60,
+          32,
+          489,
+          72
+        ],
+        "rim": "smooth bevel"
+      }
+    },
+    "beaded": {
+      "panel.png": {
+        "requested_corner_x": 88,
+        "corner_y": 25,
+        "bead_period_px": 25,
+        "center_box": [
+          83,
+          25,
+          483,
+          376
+        ],
+        "periods_per_edge_tile": 16
+      },
+      "buttons_and_tabs": {
+        "button_normal.png": {
+          "bead_period_px": 22
+        },
+        "button_hover.png": {
+          "bead_period_px": 25
+        },
+        "button_pressed.png": {
+          "bead_period_px": 24
+        },
+        "button_disabled.png": {
+          "bead_period_px": 23
+        },
+        "play_normal.png": {
+          "bead_period_px": 24
+        },
+        "play_hover.png": {
+          "bead_period_px": 24
+        },
+        "tab_selected.png": {
+          "bead_period_px": 23
+        },
+        "tab_unselected.png": {
+          "bead_period_px": 23
+        },
+        "rule": "preserve corner sizes; crop centered whole-period edge strips and fit their whole-period tiles evenly to the destination"
+      }
+    }
+  },
+  "banner_protected_zones": {
+    "coordinate_space": "normalized to project/docs/images/banner.png (2048x683)",
+    "rectangles": [
+      {
+        "name": "FREE REALMS wordmark",
+        "box": [
+          0.46,
+          0.16,
+          0.94,
+          0.47
+        ]
+      },
+      {
+        "name": "NEW starburst",
+        "box": [
+          0.85,
+          0.06,
+          0.995,
+          0.34
+        ]
+      },
+      {
+        "name": "EXPANDED plaque",
+        "box": [
+          0.53,
+          0.43,
+          0.83,
+          0.6
+        ]
+      },
+      {
+        "name": "subtitle",
+        "box": [
+          0.54,
+          0.58,
+          0.83,
+          0.66
+        ]
+      },
+      {
+        "name": "PLAY NOW button",
+        "box": [
+          0.53,
+          0.65,
+          0.85,
+          0.87
+        ]
+      }
+    ]
+  }
+}

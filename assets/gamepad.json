@@ -1,0 +1,25 @@
+{
+  "deadzone": 0.25,
+  "camera_speed": 900,
+  "cursor_speed": 700,
+  "invert_y": false,
+  "cursor_mode": "LT",
+  "left_stick": {"up": "W", "down": "S", "left": "Q", "right": "E"},
+  "buttons": {
+    "A": "SPACE",
+    "B": "X",
+    "X": "1",
+    "Y": "2",
+    "RB": "3",
+    "RT": "4",
+    "LB": "TAB",
+    "DPAD_UP": "L",
+    "DPAD_DOWN": "I",
+    "DPAD_LEFT": "M",
+    "DPAD_RIGHT": "C",
+    "START": "ESCAPE",
+    "BACK": "J",
+    "LTHUMB": "NUMLOCK",
+    "RTHUMB": "5"
+  }
+}

@@ -1,0 +1,27 @@
+[package]
+name = "osfr-launcher"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Free Realms Expanded launcher skeleton (W86)"
+license = "MIT OR Apache-2.0"
+
+# Standalone: do not couple launcher dependencies to the server crate.
+[workspace]
+
+[dependencies]
+eframe = { version = "=0.33.3", default-features = false, features = ["glow", "default_fonts", "accesskit"] }
+gilrs = { version = "=0.11.0", default-features = false, features = ["xinput"] }
+image = { version = "=0.25.9", default-features = false, features = ["png"] }
+log = { version = "=0.4.34", features = ["std"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+ed25519-dalek = { version = "2.2", default-features = false, features = ["std", "fast"] }
+getrandom = "0.2.17"
+subtle = "2.6"
+zeroize = "1.8"
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+strip = true
