@@ -75,7 +75,7 @@ server/
   reference/  the gateway's startup reference package
   content/    gameplay content (data/content from free-realms-expanded)
   state/      character.json and identity.json, your saves (created and kept here)
-  keys/       client-login-key.bin
+  keys/       client-login-key.bin   (copied from your FreeRealms.exe on first local play)
   terrain/    optional
   world/      optional
 ```

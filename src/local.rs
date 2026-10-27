@@ -18,6 +18,11 @@ pub const BROKER_PORT: u16 = 20043;
 pub const LOCAL_HANDLE: &str = "local";
 /// How long a server may take to open its port before PLAY gives up and shows its log.
 const START_TIMEOUT: Duration = Duration::from_secs(45);
+/// SHA-256 of the client's 16-byte login protocol key. Every Free Realms client holds the key in
+/// FreeRealms.exe as a NUL-terminated base64 string; the launcher copies it from the player's own
+/// client on first local play, so no release ever ships it.
+pub const LOGIN_KEY_SHA256: &str =
+    "61af8e29bc4e31ee0d642b55aca16c14fe0e25c8996cbab7ee6e558c64fa28f1";
 
 /// Every path the local realm needs, explicit so nothing is guessed at launch.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,7 +35,7 @@ pub struct LocalSettings {
     pub save: PathBuf,
     /// The account/character identity file; its `.accounts.json` sibling is the account store.
     pub identity: PathBuf,
-    /// The client login key (`references/rust-login/client-login-key.bin`).
+    /// The client login key, copied from the player's FreeRealms.exe ([`ensure_login_key`]).
     pub login_key: PathBuf,
     pub terrain: Option<PathBuf>,
     pub world: Option<PathBuf>,
@@ -60,15 +65,12 @@ impl LocalSettings {
         self.identity.with_extension("accounts.json")
     }
 
-    /// Required inputs that do not exist; PLAY refuses while any is missing.
+    /// Required server inputs that do not exist; PLAY refuses while any is missing. The login
+    /// key is not one: [`LocalRealm::start`] takes it from the client.
     pub fn missing(&self) -> Vec<PathBuf> {
         let files = ["osfr-gateway.exe", "osfr-login.exe", "osfr-account.exe"]
             .map(|name| self.bin_dir.join(name));
-        let mut missing: Vec<PathBuf> = files
-            .into_iter()
-            .chain([self.login_key.clone()])
-            .filter(|path| !path.is_file())
-            .collect();
+        let mut missing: Vec<PathBuf> = files.into_iter().filter(|path| !path.is_file()).collect();
         missing.extend(
             [&self.reference, &self.content]
                 .into_iter()
@@ -77,6 +79,60 @@ impl LocalSettings {
         );
         missing
     }
+}
+
+/// Write `path` from the client's FreeRealms.exe when it is missing (first local play).
+pub fn ensure_login_key(path: &Path, client: &Path) -> io::Result<()> {
+    if path.is_file() {
+        return Ok(());
+    }
+    let exe = fs::read(client.join("FreeRealms.exe"))?;
+    let key = find_login_key(&exe, LOGIN_KEY_SHA256).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "FreeRealms.exe does not hold the Free Realms login key; choose the original client folder",
+        )
+    })?;
+    fs::create_dir_all(
+        path.parent()
+            .ok_or_else(|| io::Error::other("no key folder"))?,
+    )?;
+    fs::write(path, key)
+}
+
+/// The NUL-terminated 24-character base64 string (16 bytes, `==` padded) in `exe` whose bytes
+/// hash to `sha256_hex`.
+pub fn find_login_key(exe: &[u8], sha256_hex: &str) -> Option<[u8; 16]> {
+    exe.windows(26).find_map(|w| {
+        if w[0] != 0 || w[25] != 0 || &w[23..25] != b"==" {
+            return None;
+        }
+        let key = base64_16(&w[1..23])?;
+        (crate::patch::sha256(&key).ok()? == sha256_hex).then_some(key)
+    })
+}
+
+/// 22 base64 characters (the `==` already stripped) -> 16 bytes.
+fn base64_16(text: &[u8]) -> Option<[u8; 16]> {
+    let (mut bits, mut count, mut out) = (0u32, 0, Vec::with_capacity(16));
+    for &c in text {
+        let value = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        bits = bits << 6 | u32::from(value);
+        count += 6;
+        if count >= 8 {
+            count -= 8;
+            out.push((bits >> count) as u8);
+            bits &= (1 << count) - 1;
+        }
+    }
+    out.try_into().ok()
 }
 
 /// One run's endpoints and secret files.
@@ -232,6 +288,7 @@ impl LocalRealm {
                 format!("The local realm is missing {}", missing.display()),
             ));
         }
+        ensure_login_key(&settings.login_key, client)?;
         let log_dir = realm_dir.join("logs");
         fs::create_dir_all(&log_dir)?;
         let handoff_key = realm_dir.join("handoff.key");
@@ -453,5 +510,44 @@ mod tests {
         };
         drop(realm);
         assert_ne!(id, 0);
+    }
+
+    #[test]
+    fn the_login_key_comes_from_the_clients_exe_and_only_when_missing() {
+        let key: [u8; 16] = std::array::from_fn(|i| i as u8);
+        let hash = crate::patch::sha256(&key).unwrap();
+        // A decoy base64 string with another key comes first; only the pinned hash matches.
+        let mut exe = b"MZ junk QUFBQUFBQUFBQUFBQUFBQQ== more".to_vec();
+        exe.extend_from_slice(b" AAECAwQFBgcICQoLDA0ODw== tail");
+        assert_eq!(find_login_key(&exe, &hash), Some(key));
+        assert_eq!(find_login_key(&exe, &"0".repeat(64)), None);
+        assert_eq!(
+            find_login_key(b" AAECAwQFBgcICQoLDA0ODw==", &hash),
+            None,
+            "unterminated"
+        );
+
+        let root = std::env::temp_dir().join(format!("osfr-login-key-{}", std::process::id()));
+        let (client, path) = (
+            root.join("client"),
+            root.join("server/keys/client-login-key.bin"),
+        );
+        fs::create_dir_all(&client).unwrap();
+        assert!(
+            ensure_login_key(&path, &client).is_err(),
+            "no FreeRealms.exe"
+        );
+        fs::write(client.join("FreeRealms.exe"), b"no key here").unwrap();
+        assert!(
+            ensure_login_key(&path, &client).is_err(),
+            "not the Free Realms client"
+        );
+        assert!(!path.exists());
+        // The pinned hash is the real client's, so a planted file stands in for a found key.
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, key).unwrap();
+        ensure_login_key(&path, &client).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), key, "an existing key is kept");
+        let _ = fs::remove_dir_all(&root);
     }
 }
