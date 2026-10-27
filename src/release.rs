@@ -1,8 +1,9 @@
 //! The local server from GitHub Releases: installed on first use, checked on each start.
 //! Built on `patch.rs` (URL rules, resumable size+SHA-256 verified downloads, manifest checks).
 //! Remote bytes are untrusted until they match the release manifest; nothing here executes them.
-//! The manifest is vouched for by TLS to GitHub and the repository's release access, not by a
-//! signature (R: a pinned Ed25519 signature over the manifest would close that gap).
+//! The manifest must carry an Ed25519 signature (`server-manifest.json.sig`, 64 raw bytes) from
+//! the release key pinned below, so control of the GitHub repository alone cannot push binaries
+//! to existing installs. The private key never leaves the maintainer's machine.
 //!
 //! Inside `server/`: files named by the manifest are managed. `state/` is never touched (a
 //! manifest naming it is refused). `keys/` and `*.key` files are created when missing and never
@@ -17,6 +18,7 @@ use crate::{
         fetch_bytes, matches, parse, root, target, valid_path,
     },
 };
+use ed25519_dalek::{Signature, VerifyingKey};
 use serde::Deserialize;
 use std::{
     collections::BTreeSet,
@@ -28,6 +30,12 @@ use std::{
 
 pub const REPO: &str = "FadedSociety/free-realms-expanded";
 const MANIFEST_ASSET: &str = "server-manifest.json";
+const SIGNATURE_ASSET: &str = "server-manifest.json.sig";
+/// The public half of the release signing key (Ed25519).
+pub const RELEASE_KEY: [u8; 32] = [
+    0x99, 0x8a, 0x74, 0x68, 0xc4, 0x21, 0xbd, 0xad, 0x44, 0x99, 0x19, 0x72, 0xd3, 0xa0, 0x1a, 0x90,
+    0x61, 0x00, 0xe1, 0xaa, 0x86, 0x3b, 0xb9, 0x08, 0xbf, 0x44, 0x8a, 0x13, 0xfa, 0xcb, 0x37, 0xcd,
+];
 /// Sane caps: GitHub itself refuses release assets over 2 GiB.
 const LIMITS: Limits = Limits {
     files: 5_000,
@@ -47,6 +55,8 @@ pub struct ReleaseSource {
     pub api_url: String,
     /// Assets live at `<download_base>/<tag>/<asset>`.
     pub download_base: String,
+    /// Ed25519 key the manifest signature must verify against.
+    pub key: [u8; 32],
 }
 
 impl Default for ReleaseSource {
@@ -54,6 +64,7 @@ impl Default for ReleaseSource {
         Self {
             api_url: format!("https://api.github.com/repos/{REPO}/releases/latest"),
             download_base: format!("https://github.com/{REPO}/releases/download"),
+            key: RELEASE_KEY,
         }
     }
 }
@@ -107,6 +118,16 @@ fn check(manifest: &Manifest, tag: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `manifest` is exactly what the release key signed.
+fn verify(key: &[u8; 32], manifest: &[u8], signature: &[u8]) -> Result<()> {
+    let signature: [u8; 64] = signature
+        .try_into()
+        .map_err(|_| "The server manifest signature is malformed.")?;
+    VerifyingKey::from_bytes(key)
+        .and_then(|key| key.verify_strict(manifest, &Signature::from_bytes(&signature)))
+        .map_err(|_| "The server manifest is not signed by the release key.".into())
 }
 
 fn attempt<T>(cancel: &AtomicBool, tries: u32, mut run: impl FnMut() -> Result<T>) -> Result<T> {
@@ -293,6 +314,10 @@ pub fn sync(
     let raw = attempt(cancel, 3, || {
         fetch_bytes(&asset_url(MANIFEST_ASSET)?, MANIFEST_LIMIT, cancel)
     })?;
+    let signature = attempt(cancel, 3, || {
+        fetch_bytes(&asset_url(SIGNATURE_ASSET)?, 64, cancel)
+    })?;
+    verify(&source.key, &raw, &signature)?;
     let manifest = parse(&raw, &LIMITS)?;
     check(&manifest, &tag)?;
 

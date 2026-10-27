@@ -1,5 +1,6 @@
 //! The server-from-releases flow, against a local HTTP site that behaves like GitHub: a
-//! latest-release JSON, a manifest asset, and file assets that 302 to a signed-looking URL.
+//! latest-release JSON, a signed manifest asset, and file assets that 302 to a signed-looking URL.
+use ed25519_dalek::{Signer, SigningKey};
 use osfr_launcher::{
     patch,
     release::{self, Outcome, ReleaseSource},
@@ -19,6 +20,8 @@ use std::{
 };
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
+/// The test site's release key (the launcher pins the real one).
+const SEED: [u8; 32] = [7; 32];
 struct Folder(PathBuf);
 impl Folder {
     fn new() -> Self {
@@ -146,11 +149,22 @@ impl Site {
             self.route(&format!("/blob/{tag}/{asset}"), 200, None, served);
         }
         let manifest = serde_json::json!({"version": 1, "tag": tag, "files": entries});
+        self.manifest(tag, serde_json::to_vec(&manifest).unwrap());
+    }
+    /// Serve `bytes` as `tag`'s manifest with a signature from the test key.
+    fn manifest(&self, tag: &str, bytes: Vec<u8>) {
+        let signature = SigningKey::from_bytes(&SEED).sign(&bytes).to_bytes();
+        self.route(
+            &format!("/download/{tag}/server-manifest.json.sig"),
+            200,
+            None,
+            signature.to_vec(),
+        );
         self.route(
             &format!("/download/{tag}/server-manifest.json"),
             200,
             None,
-            serde_json::to_vec(&manifest).unwrap(),
+            bytes,
         );
     }
     /// Publish a manifest of arbitrary JSON entries (unsafe paths, huge sizes).
@@ -161,10 +175,8 @@ impl Site {
             None,
             format!(r#"{{"tag_name":"{tag}"}}"#).into_bytes(),
         );
-        self.route(
-            &format!("/download/{tag}/server-manifest.json"),
-            200,
-            None,
+        self.manifest(
+            tag,
             serde_json::to_vec(&serde_json::json!({"version": 1, "tag": tag, "files": entries}))
                 .unwrap(),
         );
@@ -173,6 +185,7 @@ impl Site {
         ReleaseSource {
             api_url: format!("{}/repos/x/releases/latest", self.base),
             download_base: format!("{}/download", self.base),
+            key: SigningKey::from_bytes(&SEED).verifying_key().to_bytes(),
         }
     }
     fn sync(&self, server: &Path) -> Result<Outcome, String> {
@@ -393,13 +406,53 @@ fn bad_assets_tags_and_oversized_files_are_refused() {
     // A manifest for another tag than the release being installed is refused too.
     site.publish("v1", &V1, None);
     let other = site.routes.lock().unwrap()["/download/v1/server-manifest.json"].clone();
-    site.route("/download/v1/server-manifest.json", 200, None, {
-        let text = String::from_utf8(other.2)
-            .unwrap()
-            .replace(r#""tag":"v1""#, r#""tag":"v0""#);
-        text.into_bytes()
-    });
-    assert!(site.sync(&folder.server()).is_err());
+    let text = String::from_utf8(other.2)
+        .unwrap()
+        .replace(r#""tag":"v1""#, r#""tag":"v0""#);
+    site.manifest("v1", text.into_bytes());
+    let error = site.sync(&folder.server()).unwrap_err();
+    assert!(error.contains("different release"), "{error}");
+}
+
+#[test]
+fn a_manifest_without_a_valid_release_signature_installs_nothing() {
+    let (folder, site) = (Folder::new(), Site::new());
+    let sig = "/download/v1/server-manifest.json.sig";
+    let attempts: [(&str, Box<dyn Fn(&Site)>); 4] = [
+        ("missing", Box::new(|s| s.route(sig, 404, None, Vec::new()))),
+        ("short", Box::new(|s| s.route(sig, 200, None, vec![0; 63]))),
+        (
+            "other key",
+            Box::new(|s| {
+                let bytes = s.routes.lock().unwrap()["/download/v1/server-manifest.json"]
+                    .2
+                    .clone();
+                let forged = SigningKey::from_bytes(&[8; 32]).sign(&bytes).to_bytes();
+                s.route(sig, 200, None, forged.to_vec());
+            }),
+        ),
+        (
+            "edited after signing",
+            Box::new(|s| {
+                let mut bytes = s.routes.lock().unwrap()["/download/v1/server-manifest.json"]
+                    .2
+                    .clone();
+                bytes.push(b' ');
+                s.route("/download/v1/server-manifest.json", 200, None, bytes);
+            }),
+        ),
+    ];
+    for (name, tamper) in attempts {
+        site.publish("v1", &V1, None);
+        tamper(&site);
+        assert!(site.sync(&folder.server()).is_err(), "{name}");
+        assert!(
+            !folder.server().join("bin/osfr-gateway.exe").exists(),
+            "{name}"
+        );
+    }
+    // The real release key is pinned by default.
+    assert_eq!(ReleaseSource::default().key, release::RELEASE_KEY);
 }
 
 #[test]
@@ -479,6 +532,7 @@ fn plain_http_off_loopback_and_off_site_redirects_are_refused() {
         let error = run(ReleaseSource {
             api_url: api.into(),
             download_base: base.into(),
+            ..Default::default()
         })
         .unwrap_err();
         assert!(error.contains("HTTP"), "{api}: {error}");
@@ -515,6 +569,7 @@ fn offline_keeps_the_installed_server_and_reports_it() {
     let source = ReleaseSource {
         api_url: format!("http://{closed}/repos/x/releases/latest"),
         download_base: format!("http://{closed}/download"),
+        ..Default::default()
     };
     let result = release::sync(
         &folder.server(),

@@ -1856,6 +1856,7 @@ mod tests {
         app.release = ReleaseSource {
             api_url: format!("http://{closed}/latest"),
             download_base: format!("http://{closed}/download"),
+            ..Default::default()
         };
         app.play_locally();
         assert!(
