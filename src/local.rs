@@ -29,7 +29,7 @@ pub const LOGIN_KEY_SHA256: &str =
 pub struct LocalSettings {
     /// osfr-gateway.exe, osfr-login.exe and osfr-account.exe.
     pub bin_dir: PathBuf,
-    pub reference: PathBuf,
+    /// Gameplay content; the gateway builds world entry from its `startup/` folder.
     pub content: PathBuf,
     /// The character save (kept between runs).
     pub save: PathBuf,
@@ -43,13 +43,12 @@ pub struct LocalSettings {
 }
 
 impl LocalSettings {
-    /// The packaged layout: `<root>/server/{bin,reference,content,state,keys,terrain,world}`.
+    /// The packaged layout: `<root>/server/{bin,content,state,keys,terrain,world}`.
     pub fn packaged(root: &Path) -> Self {
         let server = root.join("server");
         let optional = |name: &str| Some(server.join(name)).filter(|path| path.is_dir());
         Self {
             bin_dir: server.join("bin"),
-            reference: server.join("reference"),
             content: server.join("content"),
             save: server.join("state").join("character.json"),
             identity: server.join("state").join("identity.json"),
@@ -71,12 +70,9 @@ impl LocalSettings {
         let files = ["osfr-gateway.exe", "osfr-login.exe", "osfr-account.exe"]
             .map(|name| self.bin_dir.join(name));
         let mut missing: Vec<PathBuf> = files.into_iter().filter(|path| !path.is_file()).collect();
-        missing.extend(
-            [&self.reference, &self.content]
-                .into_iter()
-                .filter(|dir| !dir.is_dir())
-                .cloned(),
-        );
+        if !self.content.is_dir() {
+            missing.push(self.content.clone());
+        }
         missing
     }
 }
@@ -151,8 +147,6 @@ pub fn gateway_args(settings: &LocalSettings, client: &Path, plan: &RunPlan) -> 
     let path = |p: &Path| p.display().to_string();
     let mut args = vec![
         plan.gateway.to_string(),
-        "--reference".into(),
-        path(&settings.reference),
         "--state".into(),
         path(&settings.save),
         "--seconds".into(),

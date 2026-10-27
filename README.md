@@ -72,7 +72,6 @@ folder beside `osfr-launcher.exe`, and the launcher gets and updates them itself
 ```text
 server/
   bin/        osfr-gateway.exe, osfr-login.exe, osfr-account.exe
-  reference/  the gateway's startup reference package
   content/    gameplay content (data/content from free-realms-expanded)
   state/      character.json and identity.json, your saves (created and kept here)
   keys/       client-login-key.bin   (copied from your FreeRealms.exe on first local play)
