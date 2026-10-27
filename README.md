@@ -53,6 +53,31 @@ must already be the A1B2C3D4 envelope the client inflates. A realm's patch
 manifest fills that folder. Every other request, including `..`, separators,
 `%` escapes, absolute paths and links (hard links too), gets 404.
 
+## Play locally
+
+A packaged build can run its own realm on your PC, so no host is needed. Put a `server/` folder beside
+`osfr-launcher.exe`:
+
+```text
+server/
+  bin/        osfr-gateway.exe, osfr-login.exe, osfr-account.exe (from free-realms-expanded)
+  reference/  the gateway's startup reference package
+  content/    gameplay content (data/content from free-realms-expanded)
+  state/      character.json and identity.json, your saves (created and kept here)
+  keys/       client-login-key.bin
+  terrain/    optional
+  world/      optional
+```
+
+When that folder is complete, the launcher shows **Play locally (no host needed)** under PLAY. It starts the
+gateway and login servers with no console windows, makes this PC's key-pair profile for the local realm the first
+time (and enrolls its public key with `osfr-account`), then launches your client against it. The servers stop when
+the client closes; your saves stay in `server/state`. Logs are in the local profile's `realm/logs` folder under
+`%APPDATA%\FreeRealmsExpanded\profiles`.
+
+Downloading `server/` from the free-realms-expanded GitHub Releases, with an update check on each start, is the next
+step and not built yet.
+
 ## Building
 
 On Windows, with Rust (rustup) and an unpacked [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) UCRT

@@ -16,9 +16,8 @@ struct Layout {
 impl Layout {
     fn load() -> Result<Self, String> {
         // One source of truth. Changes to the existing bridge layout rebuild in.
-        let layout: Self =
-            serde_json::from_str(include_str!("../assets/gamepad.json"))
-                .map_err(|_| "Controller layout could not be read.".to_owned())?;
+        let layout: Self = serde_json::from_str(include_str!("../assets/gamepad.json"))
+            .map_err(|_| "Controller layout could not be read.".to_owned())?;
         if !layout.deadzone.is_finite() || !(0.0..1.0).contains(&layout.deadzone) {
             return Err("Controller deadzone must be between zero and one.".into());
         }

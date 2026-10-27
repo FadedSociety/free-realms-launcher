@@ -10,6 +10,7 @@ use osfr_launcher::{
     LaunchPlan, LaunchSettings, LocalLoginStub, LoginProvider, SessionToken,
     assets::Responder,
     auth::{self, AuthError},
+    local::{LOCAL_HANDLE, LocalRealm, LocalSettings},
     patch::{self, PatchSource, Progress},
 };
 use std::{
@@ -137,10 +138,69 @@ pub(crate) fn default_broker(address: &str) -> String {
     address
         .trim()
         .parse::<std::net::SocketAddr>()
-        .map(|realm| {
-            std::net::SocketAddr::new(realm.ip(), AUTH_BROKER_PORT).to_string()
-        })
+        .map(|realm| std::net::SocketAddr::new(realm.ip(), AUTH_BROKER_PORT).to_string())
         .unwrap_or_else(|_| AUTH_BROKER_ENDPOINT.into())
+}
+
+/// T771: the local realm's launcher profile id.
+const LOCAL_PROFILE: &str = "local-realm";
+
+fn launcher_folder() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()?
+        .parent()
+        .map(Path::to_path_buf)
+}
+
+/// T771: start the local servers, make and enroll this PC's local profile once (a marker file
+/// records the enrollment, so a failed one is retried), then prepare and launch the client
+/// against the local login port. The returned realm must live as long as the client.
+fn start_local(
+    local: &LocalSettings,
+    client: &Path,
+    locale: Option<&Path>,
+    settings: LaunchSettings,
+) -> Result<(Child, Responder, LocalRealm), String> {
+    let realm_dir = auth::profile_directory(LOCAL_PROFILE)
+        .map_err(auth_error_message)?
+        .join("realm");
+    let realm = LocalRealm::start(local, client, &realm_dir).map_err(|e| e.to_string())?;
+    let enrolled = realm_dir.join("enrolled");
+    if !enrolled.is_file() {
+        let public_key = match auth::load_profile(LOCAL_PROFILE) {
+            Ok(_) => auth::print_public_key(LOCAL_PROFILE).map_err(auth_error_message)?,
+            Err(_) => {
+                let identity = osfr_launcher::local::server_identity(&realm_dir.join("server.id"))
+                    .map_err(|e| e.to_string())?;
+                let hex: String = identity.iter().map(|b| format!("{b:02x}")).collect();
+                create_join_profile_with(
+                    &realm.login.to_string(),
+                    &realm.broker.to_string(),
+                    &hex,
+                    LOCAL_HANDLE,
+                    LOCAL_PROFILE,
+                    auth::new_key,
+                    auth::save_profile,
+                )?
+                .public_key
+            }
+        };
+        osfr_launcher::local::enroll(local, &public_key).map_err(|e| e.to_string())?;
+        std::fs::write(&enrolled, b"").map_err(|e| e.to_string())?;
+    }
+    let mut login = RealmLogin {
+        profile_id: LOCAL_PROFILE.into(),
+    };
+    let plan = LaunchPlan::build(
+        client,
+        &realm.login.to_string(),
+        locale,
+        settings,
+        &mut login,
+    )?;
+    plan.apply()?;
+    let (child, responder) = plan.launch()?;
+    Ok((child, responder, realm))
 }
 
 pub(crate) fn create_join_profile_with(
@@ -157,14 +217,8 @@ pub(crate) fn create_join_profile_with(
         .ok_or_else(|| "Paste the host's 64-digit hexadecimal server identity.".to_owned())?;
     let fingerprint = short_fingerprint(&identity);
     let display_name = format!("{account_handle} ({fingerprint})");
-    let profile = auth::Profile::new(
-        profile_id,
-        &display_name,
-        broker,
-        identity,
-        account_handle,
-    )
-    .map_err(auth_error_message)?;
+    let profile = auth::Profile::new(profile_id, &display_name, broker, identity, account_handle)
+        .map_err(auth_error_message)?;
     let public_key = create_key(profile_id).map_err(auth_error_message)?;
     save_profile(&profile).map_err(auth_error_message)?;
     Ok(JoinedRealm {
@@ -385,6 +439,9 @@ pub(crate) struct Launcher {
     pending: Option<mpsc::Receiver<Result<(Child, Responder), String>>>,
     /// The asset responder lives exactly as long as the client it serves.
     child: Option<(Child, Responder)>,
+    /// T771: the servers "Play locally" started; dropping it stops them when the client closes.
+    local: Option<LocalRealm>,
+    pending_local: Option<mpsc::Receiver<Result<(Child, Responder, LocalRealm), String>>>,
     message: String,
     screenshot: Option<PathBuf>,
     screenshot_requested: bool,
@@ -445,6 +502,8 @@ impl Launcher {
             controller_status,
             pending: None,
             child: None,
+            local: None,
+            pending_local: None,
             message: "Choose your client copy in Settings, then select a realm.".into(),
             screenshot,
             screenshot_requested: false,
@@ -501,6 +560,43 @@ impl Launcher {
                 plan.launch()
             });
             let _ = sender.send(result);
+        });
+    }
+
+    /// T771: start the bundled server (`server/` beside the launcher), then PLAY against it.
+    fn play_locally(&mut self) {
+        if self.screenshot.is_some()
+            || self.pending.is_some()
+            || self.pending_local.is_some()
+            || self.child.is_some()
+        {
+            return;
+        }
+        if self.client.trim().is_empty() {
+            self.settings_page = true;
+            self.message = "Choose the client folder before playing.".into();
+            return;
+        }
+        let Some(root) = launcher_folder() else {
+            self.message = "Could not find the launcher's folder.".into();
+            return;
+        };
+        let local = LocalSettings::packaged(&root);
+        if let Some(missing) = local.missing().first() {
+            self.message = format!(
+                "Play locally needs the server files; {} is missing.",
+                missing.display()
+            );
+            return;
+        }
+        let client = PathBuf::from(&self.client);
+        let locale = (!self.locale.trim().is_empty()).then(|| PathBuf::from(&self.locale));
+        let settings = self.settings;
+        let (sender, receiver) = mpsc::channel();
+        self.pending_local = Some(receiver);
+        self.message = "Starting the local realm...".into();
+        std::thread::spawn(move || {
+            let _ = sender.send(start_local(&local, &client, locale.as_deref(), settings));
         });
     }
 
@@ -913,6 +1009,20 @@ impl Launcher {
             if play.clicked() {
                 self.play();
             }
+            // T771: shown only for a packaged build that carries the server beside the launcher.
+            if launcher_folder()
+                .is_some_and(|root| LocalSettings::packaged(&root).missing().is_empty())
+                && ui
+                    .add_enabled(
+                        self.pending.is_none()
+                            && self.pending_local.is_none()
+                            && self.child.is_none(),
+                        egui::Button::new("Play locally (no host needed)"),
+                    )
+                    .clicked()
+            {
+                self.play_locally();
+            }
             ui.vertical(|ui| {
                 let id = &mut self.servers[self.selected].profile_id;
                 let label = profile_label(id, &self.profiles);
@@ -1186,6 +1296,30 @@ impl eframe::App for Launcher {
         }
         self.navigation(ctx);
         self.poll_patch();
+        if let Some(receiver) = &self.pending_local {
+            match receiver.try_recv() {
+                Ok(result) => {
+                    self.pending_local = None;
+                    match result {
+                        Ok((child, responder, realm)) => {
+                            self.child = Some((child, responder));
+                            self.local = Some(realm);
+                            self.message =
+                                "Playing on this PC. The local realm stops when the client closes."
+                                    .into();
+                        }
+                        Err(error) => self.message = error,
+                    }
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.pending_local = None;
+                    self.message =
+                        "The local realm stopped starting. Restart the launcher to try again."
+                            .into();
+                }
+                Err(mpsc::TryRecvError::Empty) => (),
+            }
+        }
         if let Some(receiver) = &self.pending {
             match receiver.try_recv() {
                 Ok(result) => {
@@ -1210,6 +1344,7 @@ impl eframe::App for Launcher {
             match child.try_wait() {
                 Ok(Some(_)) => {
                     self.child = None;
+                    self.local = None;
                     self.message = "The client has closed.".into();
                 }
                 // Keep the client and its responder: it may still be running.
@@ -1539,6 +1674,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// T771: a build without `server/` beside the launcher (a test binary has none) names the
+    /// missing file and starts no local realm.
+    #[test]
+    fn play_locally_without_the_packaged_server_names_what_is_missing() {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut app = Launcher::new(
+            &cc,
+            None,
+            false,
+            Rc::new(Cell::new(false)),
+            false,
+            Some(1.0),
+        )
+        .unwrap();
+        app.screenshot = None;
+        app.client = std::env::temp_dir().display().to_string();
+        app.play_locally();
+        assert!(
+            app.pending_local.is_none(),
+            "nothing starts without the server files"
+        );
+        assert!(app.local.is_none());
+        assert!(
+            app.message.contains("server files"),
+            "the message names the missing server files: {}",
+            app.message
+        );
+    }
 
     #[test]
     fn patch_ui_routes_repair_and_gates_play_for_the_verified_selection() {

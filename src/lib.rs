@@ -2,6 +2,7 @@
 
 pub mod assets;
 pub mod auth;
+pub mod local;
 pub mod patch;
 
 /// Handle enrolment commands before opening the UI. `None` leaves ordinary UI
