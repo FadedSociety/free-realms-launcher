@@ -4,6 +4,7 @@ pub mod assets;
 pub mod auth;
 pub mod local;
 pub mod patch;
+pub mod release;
 
 /// Handle enrolment commands before opening the UI. `None` leaves ordinary UI
 /// arguments to the caller. The only successful output is a public key (hex).

@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const MANIFEST_LIMIT: u64 = 4 * 1024 * 1024;
+pub(crate) const MANIFEST_LIMIT: u64 = 4 * 1024 * 1024;
 const PART: &str = ".osfr-part";
 
 /// Trusted, local, per-realm settings. The pin must come from the operator,
@@ -42,21 +42,38 @@ pub struct PatchReport {
     pub bytes_downloaded: u64,
 }
 
+/// `tag` and `asset` are used by the GitHub release flow (`release.rs`) only.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Manifest {
+pub(crate) struct Manifest {
     version: u32,
-    files: Vec<Entry>,
+    #[serde(default)]
+    pub tag: Option<String>,
+    pub files: Vec<Entry>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Entry {
-    path: String,
-    size: u64,
-    sha256: String,
+pub(crate) struct Entry {
+    pub path: String,
+    pub size: u64,
+    pub sha256: String,
+    #[serde(default)]
+    pub asset: Option<String>,
 }
 
-fn cancelled(cancel: &AtomicBool) -> Result<()> {
+/// Manifest size caps: file count, one file, all files.
+pub(crate) struct Limits {
+    pub files: usize,
+    pub file: u64,
+    pub total: u64,
+}
+const PATCH_LIMITS: Limits = Limits {
+    files: 50_000,
+    file: 16 * 1024 * 1024 * 1024,
+    total: 128 * 1024 * 1024 * 1024,
+};
+
+pub(crate) fn cancelled(cancel: &AtomicBool) -> Result<()> {
     if cancel.load(Ordering::Relaxed) {
         Err("Patching cancelled. Partial downloads are kept.".into())
     } else {
@@ -64,7 +81,7 @@ fn cancelled(cancel: &AtomicBool) -> Result<()> {
     }
 }
 
-fn valid_hash(hash: &str) -> bool {
+pub(crate) fn valid_hash(hash: &str) -> bool {
     hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
@@ -98,18 +115,21 @@ fn manifest(bytes: &[u8], pin: &str) -> Result<Manifest> {
     if !valid_hash(pin) || !sha256(bytes)?.eq_ignore_ascii_case(pin) {
         return Err("Patch manifest does not match the trusted SHA-256 pin.".into());
     }
+    parse(bytes, &PATCH_LIMITS)
+}
+
+/// Parse and structurally validate manifest JSON (paths, hashes, sizes, overlaps).
+/// The caller decides what vouches for the bytes: an operator pin or a release tag.
+pub(crate) fn parse(bytes: &[u8], limits: &Limits) -> Result<Manifest> {
     let value: Manifest =
         serde_json::from_slice(bytes).map_err(|_| "Invalid patch manifest JSON.")?;
-    if value.version != 1 || value.files.is_empty() || value.files.len() > 50_000 {
+    if value.version != 1 || value.files.is_empty() || value.files.len() > limits.files {
         return Err("Unsupported or empty patch manifest.".into());
     }
     let mut names = BTreeSet::new();
     let mut total = 0_u64;
     for entry in &value.files {
-        if !valid_path(&entry.path)
-            || !valid_hash(&entry.sha256)
-            || entry.size > 16 * 1024 * 1024 * 1024
-        {
+        if !valid_path(&entry.path) || !valid_hash(&entry.sha256) || entry.size > limits.file {
             return Err("Unsafe patch path, hash or file size in manifest.".into());
         }
         if !names.insert(entry.path.to_ascii_lowercase()) {
@@ -118,7 +138,7 @@ fn manifest(bytes: &[u8], pin: &str) -> Result<Manifest> {
         total = total
             .checked_add(entry.size)
             .ok_or("Patch size overflow.")?;
-        if total > 128 * 1024 * 1024 * 1024 {
+        if total > limits.total {
             return Err("Patch exceeds the total size limit.".into());
         }
     }
@@ -132,7 +152,7 @@ fn manifest(bytes: &[u8], pin: &str) -> Result<Manifest> {
     Ok(value)
 }
 
-fn root(client: &Path) -> Result<PathBuf> {
+pub(crate) fn root(client: &Path) -> Result<PathBuf> {
     let absolute = std::path::absolute(client).map_err(io_error)?;
     for ancestor in absolute.ancestors() {
         if !no_link(ancestor)?.is_dir() {
@@ -142,7 +162,7 @@ fn root(client: &Path) -> Result<PathBuf> {
     absolute.canonicalize().map_err(io_error)
 }
 
-fn target(root: &Path, relative: &str) -> Result<PathBuf> {
+pub(crate) fn target(root: &Path, relative: &str) -> Result<PathBuf> {
     let mut directory = root.to_path_buf();
     let parts: Vec<_> = relative.split('/').collect();
     for component in &parts[..parts.len() - 1] {
@@ -162,7 +182,7 @@ fn target(root: &Path, relative: &str) -> Result<PathBuf> {
     safe_target(root, relative)
 }
 
-fn matches(path: &Path, entry: &Entry, cancel: &AtomicBool) -> Result<bool> {
+pub(crate) fn matches(path: &Path, entry: &Entry, cancel: &AtomicBool) -> Result<bool> {
     if !path.try_exists().map_err(io_error)? {
         return Ok(false);
     }
@@ -200,14 +220,8 @@ pub fn repair(
     for attempt in 0..3 {
         for url in &urls {
             cancelled(cancel)?;
-            let result = (|| {
-                let mut response = native::get(url, 0)?;
-                if response.status != 200 || response.length > MANIFEST_LIMIT {
-                    return Err("Invalid patch manifest response or size.".into());
-                }
-                let bytes = read_manifest(&mut response, cancel)?;
-                manifest(&bytes, &source.manifest_sha256)
-            })();
+            let result = fetch_bytes(url, MANIFEST_LIMIT, cancel)
+                .and_then(|bytes| manifest(&bytes, &source.manifest_sha256));
             match result {
                 Ok(value) => {
                     parsed = Some(value);
@@ -286,7 +300,7 @@ pub fn repair(
     Ok(report)
 }
 
-fn backoff(attempt: u32, cancel: &AtomicBool) -> Result<()> {
+pub(crate) fn backoff(attempt: u32, cancel: &AtomicBool) -> Result<()> {
     // (R) Three attempts, 100/200/400 ms backoff; check cancellation every 20 ms.
     for _ in 0..(5 << attempt) {
         cancelled(cancel)?;
@@ -295,7 +309,40 @@ fn backoff(attempt: u32, cancel: &AtomicBool) -> Result<()> {
     cancelled(cancel)
 }
 
-fn read_manifest(response: &mut native::Response, cancel: &AtomicBool) -> Result<Vec<u8>> {
+/// GET `url` (status 200) and read the whole body, at most `limit` bytes. GitHub's API
+/// answers chunked with no Content-Length, so the cap is enforced while reading.
+pub(crate) fn fetch_bytes(url: &Url, limit: u64, cancel: &AtomicBool) -> Result<Vec<u8>> {
+    let mut response = fetch(url, 0)?;
+    if response.status != 200 || response.length.is_some_and(|n| n > limit) {
+        return Err(format!(
+            "The server answered HTTP {} or sent too much data.",
+            response.status
+        ));
+    }
+    read_manifest(&mut response, limit, cancel)
+}
+
+/// One GET. Only release URLs follow redirects (at most three, each re-validated);
+/// every other URL gets the raw response and a 3xx is refused by the caller.
+fn fetch(url: &Url, offset: u64) -> Result<native::Response> {
+    let mut url = url.clone();
+    for _ in 0..4 {
+        let response = native::get(&url, offset)?;
+        match response.location.as_deref() {
+            Some(next) if url.follow && matches!(response.status, 301 | 302 | 303 | 307 | 308) => {
+                url = url.redirect(next)?
+            }
+            _ => return Ok(response),
+        }
+    }
+    Err("Too many redirects.".into())
+}
+
+fn read_manifest(
+    response: &mut native::Response,
+    limit: u64,
+    cancel: &AtomicBool,
+) -> Result<Vec<u8>> {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut bytes = Vec::new();
     let mut buffer = [0; 16 * 1024];
@@ -308,18 +355,18 @@ fn read_manifest(response: &mut native::Response, cancel: &AtomicBool) -> Result
         if count == 0 {
             break;
         }
-        if bytes.len() as u64 + count as u64 > response.length {
+        if bytes.len() as u64 + count as u64 > response.length.unwrap_or(limit).min(limit) {
             return Err("Patch manifest exceeds declared size.".into());
         }
         bytes.extend_from_slice(&buffer[..count]);
     }
-    if bytes.len() as u64 != response.length {
+    if response.length.is_some_and(|n| n != bytes.len() as u64) {
         return Err("Incomplete patch manifest.".into());
     }
     Ok(bytes)
 }
 
-fn download(
+pub(crate) fn download(
     root: &Path,
     entry: &Entry,
     url: &Url,
@@ -349,17 +396,17 @@ fn download(
         offset = 0;
     }
     if offset < entry.size {
-        let mut response = native::get(url, offset)?;
+        let mut response = fetch(url, offset)?;
         if response.status == 200 {
             // Servers may ignore Range. Accept only the complete expected body.
-            if response.length != entry.size {
+            if response.length != Some(entry.size) {
                 return Err("Patch server reported the wrong file size.".into());
             }
             file.set_len(0).map_err(io_error)?;
             offset = 0;
         } else if response.status != 206
             || offset == 0
-            || response.length != entry.size - offset
+            || response.length != Some(entry.size - offset)
             || response.range.as_deref()
                 != Some(&format!("bytes {offset}-{}/{}", entry.size - 1, entry.size))
         {
@@ -410,12 +457,22 @@ fn download(
     fs::rename(&partial, destination).map_err(io_error)
 }
 
+/// Hosts a release download may touch, over HTTPS port 443 only.
+const GITHUB_HOSTS: [&str; 4] = [
+    "api.github.com",
+    "github.com",
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+];
+
 #[derive(Clone)]
-struct Url {
+pub(crate) struct Url {
     host: String,
     port: u16,
     path: String,
     tls: bool,
+    /// Release URLs only: follow redirects that stay on [`GITHUB_HOSTS`].
+    follow: bool,
 }
 impl Url {
     fn parse(text: &str) -> Result<Self> {
@@ -472,7 +529,44 @@ impl Url {
             port,
             path: format!("/{path}"),
             tls,
+            follow: false,
         })
+    }
+    /// A release URL: HTTPS on a GitHub host, or literal-loopback HTTP (the test hosts).
+    pub(crate) fn release(text: &str) -> Result<Self> {
+        let mut url = Self::parse(text)?;
+        url.follow = true;
+        if url.tls
+            && !(url.port == 443
+                && GITHUB_HOSTS
+                    .iter()
+                    .any(|h| url.host.eq_ignore_ascii_case(h)))
+        {
+            return Err("Release downloads are limited to GitHub over HTTPS.".into());
+        }
+        Ok(url)
+    }
+    /// The next hop of a redirect: absolute, same rules as [`Self::release`], and a
+    /// plain-HTTP loopback hop is possible only from a loopback origin. Signed CDN
+    /// links carry a query string, so it is checked separately and kept verbatim.
+    fn redirect(&self, location: &str) -> Result<Self> {
+        let refused = || "Refused an unsafe release redirect.".to_owned();
+        let (base, query) = location.split_once('?').unwrap_or((location, ""));
+        if location.len() > 4096
+            || !query
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-._~%=&+:/,".contains(&b))
+        {
+            return Err(refused());
+        }
+        let mut next = Self::release(base).map_err(|_| refused())?;
+        if self.tls && !next.tls {
+            return Err(refused());
+        }
+        if !query.is_empty() {
+            next.path = format!("{}?{query}", next.path);
+        }
+        Ok(next)
     }
     fn file(&self, path: &str) -> Self {
         let mut url = self.clone();
@@ -618,8 +712,10 @@ mod native {
         _connection: Internet,
         _session: Internet,
         pub status: u32,
-        pub length: u64,
+        /// `None` when the server sent no Content-Length (chunked); downloads refuse that.
+        pub length: Option<u64>,
         pub range: Option<String>,
+        pub location: Option<String>,
     }
     fn header(request: Handle, kind: u32) -> Result<Option<String>> {
         let mut buffer = [0_u16; 4096];
@@ -722,9 +818,10 @@ mod native {
                 .ok_or("Missing patch HTTP status.")?
                 .parse()
                 .map_err(|_| "Invalid patch HTTP status.")?;
+            let location = header(request.0, 33)?;
             let length = header(request.0, 5)?
-                .ok_or("Patch server must provide Content-Length.")?
-                .parse::<u64>()
+                .map(|text| text.parse::<u64>())
+                .transpose()
                 .map_err(|_| "Invalid patch Content-Length.")?;
             if header(request.0, 29)?.is_some_and(|s| !s.eq_ignore_ascii_case("identity")) {
                 return Err("Compressed patch responses are not accepted.".into());
@@ -737,6 +834,7 @@ mod native {
                 status,
                 length,
                 range,
+                location,
             })
         }
     }
@@ -822,5 +920,61 @@ mod native {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Url;
+
+    #[test]
+    fn release_urls_are_github_https_or_loopback_http() {
+        for ok in [
+            "https://api.github.com/repos/a/b/releases/latest",
+            "https://github.com/a/b/releases/download/v1/x",
+            "http://127.0.0.1:8080/x",
+            "http://[::1]:1/x",
+        ] {
+            assert!(Url::release(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "http://github.com/x",
+            "http://example.com/x",
+            "https://example.com/x",
+            "https://github.com.evil.example/x",
+            "https://github.com:8443/x",
+            "https://github.com@evil.example/x",
+            "https://api.github.com\\@evil/x",
+            "ftp://github.com/x",
+            "https://objects.githubusercontent.com.evil/x",
+            "https://github.com/x?a=b",
+        ] {
+            assert!(Url::release(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn redirects_stay_on_github_and_never_downgrade() {
+        let github = Url::release("https://github.com/a/b/releases/download/v1/x").unwrap();
+        for ok in [
+            "https://release-assets.githubusercontent.com/p/1?sp=r&sig=ab%2Fc%3D&se=2026-10-26T22%3A00%3A00Z",
+            "https://objects.githubusercontent.com/p",
+        ] {
+            assert!(github.redirect(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "http://127.0.0.1/x",
+            "http://github.com/x",
+            "https://evil.example/x",
+            "/relative/path",
+            "https://github.com/x?a=<script>",
+            "https://github.com/x?a b",
+            "https://github.com/x#frag",
+        ] {
+            assert!(github.redirect(bad).is_err(), "{bad}");
+        }
+        let local = Url::release("http://127.0.0.1:9/x").unwrap();
+        assert!(local.redirect("http://127.0.0.1:9/y?s=1").is_ok());
+        assert!(local.redirect("http://example.com/y").is_err());
     }
 }

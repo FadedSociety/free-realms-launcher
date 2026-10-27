@@ -55,12 +55,23 @@ manifest fills that folder. Every other request, including `..`, separators,
 
 ## Play locally
 
-A packaged build can run its own realm on your PC, so no host is needed. Put a `server/` folder beside
-`osfr-launcher.exe`:
+The launcher can run its own realm on your PC, so no host is needed. The server files live in a `server/`
+folder beside `osfr-launcher.exe`, and the launcher gets and updates them itself from the latest
+[GitHub Release of free-realms-expanded](https://github.com/FadedSociety/free-realms-expanded/releases):
+
+- **First use.** Until `server/` is complete the button reads **Play locally (downloads the server first)**.
+  Pressing it downloads the latest release into `server/`, checks every file, installs it and stops. Nothing is
+  started for you: press **Play locally (no host needed)** afterwards.
+- **Each start.** With a server installed, the launcher checks GitHub in the background. If a newer release
+  exists the message line says "A server update is available", then shows the download progress, and only the
+  files that changed are downloaded. The window stays usable, and the launcher never starts the server or the
+  client by itself. Play locally waits while a check or download is running.
+- **Offline.** If GitHub cannot be reached, the message line says so and the installed server is used as it is.
+- **Repair.** Delete `server/.osfr-release.json` to make the next start re-check every file against the release.
 
 ```text
 server/
-  bin/        osfr-gateway.exe, osfr-login.exe, osfr-account.exe (from free-realms-expanded)
+  bin/        osfr-gateway.exe, osfr-login.exe, osfr-account.exe
   reference/  the gateway's startup reference package
   content/    gameplay content (data/content from free-realms-expanded)
   state/      character.json and identity.json, your saves (created and kept here)
@@ -69,14 +80,52 @@ server/
   world/      optional
 ```
 
-When that folder is complete, the launcher shows **Play locally (no host needed)** under PLAY. It starts the
-gateway and login servers with no console windows, makes this PC's key-pair profile for the local realm the first
-time (and enrolls its public key with `osfr-account`), then launches your client against it. The servers stop when
-the client closes; your saves stay in `server/state`. Logs are in the local profile's `realm/logs` folder under
+When that folder is complete, **Play locally (no host needed)** starts the gateway and login servers with no
+console windows, makes this PC's key-pair profile for the local realm the first time (and enrolls its public key
+with `osfr-account`), then launches your client against it. The servers stop when the client closes; your saves
+stay in `server/state`. Logs are in the local profile's `realm/logs` folder under
 `%APPDATA%\FreeRealmsExpanded\profiles`.
 
-Downloading `server/` from the free-realms-expanded GitHub Releases, with an update check on each start, is the next
-step and not built yet.
+### What the release contains
+
+The project lead decides what a release contains; the launcher installs exactly the files the release manifest
+lists and nothing else. A release carries one manifest asset, `server-manifest.json`, and one asset per file:
+
+```json
+{
+  "version": 1,
+  "tag": "v0.1.0",
+  "files": [
+    { "path": "bin/osfr-gateway.exe", "size": 12345678, "sha256": "<64 hex digits>", "asset": "osfr-gateway.exe" }
+  ]
+}
+```
+
+- `version` is the manifest format, currently `1`. `tag` must equal the release's own tag, so a manifest cannot
+  be replayed from another release.
+- `path` is relative to `server/`, with `/` separators: portable ASCII names only, no `..`, drive letters, UNC
+  or absolute paths, Windows device names, alternate data streams, or leading dots. `state/` is refused
+  outright.
+- `size` and `sha256` are checked for every download. `asset` is the file's name on the release (letters,
+  digits, `.`, `_`, `-`). GitHub allows at most 1000 assets per release.
+- Caps: a 4 MiB manifest, 5000 files, 2 GiB per file and 4 GiB in total.
+
+### How an update stays safe
+
+- **HTTPS only.** The launcher talks to `api.github.com` and `github.com` and follows the redirect to GitHub's
+  release storage (`objects.githubusercontent.com` or `release-assets.githubusercontent.com`), re-checking every
+  hop. Anything else, and plain HTTP, is refused (literal loopback HTTP exists only for the automated tests).
+  TLS is Windows' own WinHTTP, so there is no extra TLS library in the launcher.
+- **Stage, verify, then swap.** Files are downloaded into `server/.update-stage/` and each is checked for size
+  and SHA-256 before anything in `server/` changes. Only when all of them pass are the files swapped in, with
+  the replaced ones set aside and put back if any step fails. A crash mid-swap is rolled back on the next
+  start. The release marker `server/.osfr-release.json` is written last, so a half-finished update is never
+  recorded as installed. Nothing downloaded is run before it is verified.
+- **Your data is yours.** `server/state/` is never read or written by an update. Files under `keys/` and any
+  `*.key` or `*.pem` file are installed only when missing and never overwritten. Files you add yourself are
+  left alone; files an older release shipped and a newer one dropped are removed.
+- **Trust.** The manifest comes from the release itself, so trust rests on TLS to GitHub and on who can publish
+  releases in the repository. There is no signature on the manifest yet.
 
 ## Building
 

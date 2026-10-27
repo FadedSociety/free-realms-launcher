@@ -54,6 +54,20 @@ requiring a sidecar `libunwind.dll`. Its unpacked `LICENSE.TXT` identifies Apach
 2.0 with LLVM exceptions; retain applicable toolchain/runtime notices when
 packaging. A complete runtime/font/transitive distribution audit remains open.
 
+## Server from GitHub Releases (2026-10-26)
+
+No Cargo dependency added or updated; Cargo.toml/Cargo.lock are unchanged. The release
+download reuses the W121 WinHTTP adapter, which already speaks HTTPS with Windows
+certificate validation (TLS 1.2 minimum). It was checked against the live
+`api.github.com` and the `github.com` release redirect to GitHub's CDN
+(`cargo test --lib -- --ignored live_github`), so a vendored TLS stack (for example
+`ureq` with `rustls`, which would add a TLS stack, a crypto provider and their transitive
+crates to a security-sensitive binary) buys nothing here. Two WinHTTP behaviours were
+extended in `src/patch.rs`: it follows at most three redirects, only for release URLs and
+only to GitHub's own hosts, and it accepts a chunked (no Content-Length) response for
+small bounded reads, because GitHub's API answers that way. File downloads still require an
+exact Content-Length. WinHTTP is opened without proxy support, as before.
+
 ## W86c bundled fonts and art (2026-10-16)
 
 No crate was added or updated. Fonts are compiled in; nothing is fetched at

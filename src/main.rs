@@ -12,6 +12,7 @@ use osfr_launcher::{
     auth::{self, AuthError},
     local::{LOCAL_HANDLE, LocalRealm, LocalSettings},
     patch::{self, PatchSource, Progress},
+    release::{self, ReleaseSource},
 };
 use std::{
     cell::Cell,
@@ -80,6 +81,72 @@ struct PatchJob {
     selection: PatchSelection,
     cancel: Arc<AtomicBool>,
     result: mpsc::Receiver<Result<patch::PatchReport, String>>,
+}
+
+/// The local server's install or update check, running off the UI thread.
+struct ServerJob {
+    cancel: Arc<AtomicBool>,
+    result: mpsc::Receiver<Result<release::Outcome, String>>,
+    progress: Arc<Mutex<Progress>>,
+    had_server: bool,
+    /// The last text this job put on the message line; it rewrites only its own text.
+    shown: String,
+    /// The message line before the check began, restored when the server is already current.
+    before: String,
+}
+
+/// The message line for a server job: `done` is its result once it has finished. `None` means
+/// nothing worth saying (the installed server is already the latest release).
+fn server_message(
+    had_server: bool,
+    progress: &Progress,
+    done: Option<&Result<release::Outcome, String>>,
+) -> Option<String> {
+    let megabytes = |bytes: u64| format!("{:.1} MB", bytes as f64 / 1_048_576.0);
+    let reason = |error: &str| error.trim_end_matches('.').to_owned();
+    Some(match done {
+        Some(Ok(outcome)) if !outcome.installed => return None,
+        Some(Ok(outcome)) if had_server => format!(
+            "Local server updated to {}. Press Play locally when you are ready.",
+            outcome.tag
+        ),
+        Some(Ok(outcome)) => format!(
+            "Local server {} installed. Press Play locally to start it.",
+            outcome.tag
+        ),
+        Some(Err(error)) if had_server => format!(
+            "Could not check for a server update ({}). Using the installed server.",
+            reason(error)
+        ),
+        Some(Err(error)) => format!("Could not download the local server ({}).", reason(error)),
+        None => {
+            // An installed server says an update exists; a first install just says it downloads.
+            let head = if had_server {
+                "A server update is available. "
+            } else {
+                ""
+            };
+            match progress.phase {
+                "Update available" if had_server => "A server update is available.".into(),
+                "Update available" => "Downloading the local server...".into(),
+                "Installing" => format!("{head}Installing the local server files..."),
+                "Verifying" | "Downloading" if progress.files_total > 0 => format!(
+                    "{head}{}: {}/{} files, {} of {}",
+                    if had_server {
+                        "Downloading"
+                    } else {
+                        "Downloading the local server"
+                    },
+                    progress.files_done,
+                    progress.files_total,
+                    megabytes(progress.bytes_done),
+                    megabytes(progress.bytes_total)
+                ),
+                "Verifying" => format!("{head}Checking the local server files..."),
+                _ => "Checking for a server update...".into(),
+            }
+        }
+    })
 }
 
 // (R) Discovery selects existing trusted profiles through auth's validation;
@@ -442,6 +509,10 @@ pub(crate) struct Launcher {
     /// T771: the servers "Play locally" started; dropping it stops them when the client closes.
     local: Option<LocalRealm>,
     pending_local: Option<mpsc::Receiver<Result<(Child, Responder, LocalRealm), String>>>,
+    /// The folder holding `server/` (the launcher's own), and where its releases come from.
+    launcher_dir: Option<PathBuf>,
+    release: ReleaseSource,
+    server_job: Option<ServerJob>,
     message: String,
     screenshot: Option<PathBuf>,
     screenshot_requested: bool,
@@ -504,6 +575,9 @@ impl Launcher {
             child: None,
             local: None,
             pending_local: None,
+            launcher_dir: launcher_folder(),
+            release: ReleaseSource::default(),
+            server_job: None,
             message: "Choose your client copy in Settings, then select a realm.".into(),
             screenshot,
             screenshot_requested: false,
@@ -563,7 +637,8 @@ impl Launcher {
         });
     }
 
-    /// T771: start the bundled server (`server/` beside the launcher), then PLAY against it.
+    /// T771: start the server (`server/` beside the launcher), then PLAY against it. The first
+    /// use, or a damaged install, downloads it from GitHub Releases instead and starts nothing.
     fn play_locally(&mut self) {
         if self.screenshot.is_some()
             || self.pending.is_some()
@@ -572,21 +647,23 @@ impl Launcher {
         {
             return;
         }
-        if self.client.trim().is_empty() {
-            self.settings_page = true;
-            self.message = "Choose the client folder before playing.".into();
-            return;
-        }
-        let Some(root) = launcher_folder() else {
+        let Some(root) = self.launcher_dir.clone() else {
             self.message = "Could not find the launcher's folder.".into();
             return;
         };
+        if self.server_job.is_some() {
+            self.message =
+                "The local server is being checked or downloaded. Try again in a moment.".into();
+            return;
+        }
         let local = LocalSettings::packaged(&root);
-        if let Some(missing) = local.missing().first() {
-            self.message = format!(
-                "Play locally needs the server files; {} is missing.",
-                missing.display()
-            );
+        if !local.missing().is_empty() {
+            self.start_server_job(true);
+            return;
+        }
+        if self.client.trim().is_empty() {
+            self.settings_page = true;
+            self.message = "Choose the client folder before playing.".into();
             return;
         }
         let client = PathBuf::from(&self.client);
@@ -598,6 +675,77 @@ impl Launcher {
         std::thread::spawn(move || {
             let _ = sender.send(start_local(&local, &client, locale.as_deref(), settings));
         });
+    }
+
+    /// Install or update the local server from the latest GitHub release, off the UI thread.
+    /// `force` re-verifies every file even when the installed release is current.
+    fn start_server_job(&mut self, force: bool) {
+        let Some(root) = self.launcher_dir.clone() else {
+            return;
+        };
+        if self.screenshot.is_some() || self.server_job.is_some() {
+            return;
+        }
+        let had_server = LocalSettings::packaged(&root).missing().is_empty();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let progress = Arc::new(Mutex::new(Progress::default()));
+        let (sender, result) = mpsc::channel();
+        let (stopping, state, source) = (cancel.clone(), progress.clone(), self.release.clone());
+        std::thread::spawn(move || {
+            let outcome = release::sync(&root.join("server"), &source, force, &stopping, |p| {
+                if let Ok(mut state) = state.lock() {
+                    *state = p.clone();
+                }
+            });
+            let _ = sender.send(outcome);
+        });
+        self.server_job = Some(ServerJob {
+            cancel,
+            result,
+            progress,
+            had_server,
+            shown: String::new(),
+            before: self.message.clone(),
+        });
+    }
+
+    /// On start, an installed server is checked for a newer release. Nothing is downloaded when
+    /// there is no server yet (that waits for the first Play locally), and nothing is launched.
+    fn check_server_on_start(&mut self) {
+        let installed = self
+            .launcher_dir
+            .as_ref()
+            .is_some_and(|root| LocalSettings::packaged(root).missing().is_empty());
+        if installed {
+            self.start_server_job(false);
+        }
+    }
+
+    fn poll_server(&mut self) {
+        let Some(job) = &mut self.server_job else {
+            return;
+        };
+        let done = match job.result.try_recv() {
+            Ok(result) => Some(result),
+            Err(mpsc::TryRecvError::Disconnected) => Some(Err("The update worker stopped.".into())),
+            Err(mpsc::TryRecvError::Empty) => None,
+        };
+        let progress = job.progress.lock().map(|p| p.clone()).unwrap_or_default();
+        let text = server_message(job.had_server, &progress, done.as_ref());
+        // Progress only rewrites the line while it still shows this job's own text; the final
+        // result always lands. An up-to-date check puts back what was there before.
+        let ours = job.shown.is_empty() || self.message == job.shown;
+        match text {
+            Some(text) if done.is_some() || (ours && text != self.message) => {
+                job.shown = text.clone();
+                self.message = text;
+            }
+            None if ours => self.message = job.before.clone(),
+            _ => (),
+        }
+        if done.is_some() {
+            self.server_job = None;
+        }
     }
 
     fn patch_selection(&self) -> PatchSelection {
@@ -1009,19 +1157,20 @@ impl Launcher {
             if play.clicked() {
                 self.play();
             }
-            // T771: shown only for a packaged build that carries the server beside the launcher.
-            if launcher_folder()
-                .is_some_and(|root| LocalSettings::packaged(&root).missing().is_empty())
-                && ui
-                    .add_enabled(
-                        self.pending.is_none()
-                            && self.pending_local.is_none()
-                            && self.child.is_none(),
-                        egui::Button::new("Play locally (no host needed)"),
-                    )
-                    .clicked()
-            {
-                self.play_locally();
+            // T771: runs the server beside the launcher; the first click downloads it from GitHub.
+            if let Some(root) = &self.launcher_dir {
+                let label = if LocalSettings::packaged(root).missing().is_empty() {
+                    "Play locally (no host needed)"
+                } else {
+                    "Play locally (downloads the server first)"
+                };
+                let idle = self.pending.is_none()
+                    && self.pending_local.is_none()
+                    && self.child.is_none()
+                    && self.server_job.is_none();
+                if ui.add_enabled(idle, egui::Button::new(label)).clicked() {
+                    self.play_locally();
+                }
             }
             ui.vertical(|ui| {
                 let id = &mut self.servers[self.selected].profile_id;
@@ -1289,6 +1438,7 @@ impl eframe::App for Launcher {
         if self.controller_on
             || self.pending.is_some()
             || self.patch_job.is_some()
+            || self.server_job.is_some()
             || growing
             || capture_waiting
         {
@@ -1296,6 +1446,7 @@ impl eframe::App for Launcher {
         }
         self.navigation(ctx);
         self.poll_patch();
+        self.poll_server();
         if let Some(receiver) = &self.pending_local {
             match receiver.try_recv() {
                 Ok(result) => {
@@ -1521,6 +1672,9 @@ impl Drop for Launcher {
         if let Some(job) = &self.patch_job {
             job.cancel.store(true, Ordering::Relaxed);
         }
+        if let Some(job) = &self.server_job {
+            job.cancel.store(true, Ordering::Relaxed);
+        }
     }
 }
 
@@ -1639,6 +1793,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .map_err(std::io::Error::other)?;
             launcher.patch_preview = patch_preview;
+            launcher.check_server_on_start();
             if join_preview {
                 launcher.load_join_preview();
             }
@@ -1675,10 +1830,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
 
-    /// T771: a build without `server/` beside the launcher (a test binary has none) names the
-    /// missing file and starts no local realm.
+    /// First use: Play locally without `server/` downloads it and starts nothing. Here GitHub is
+    /// a closed loopback port, so the download fails and the message says so.
     #[test]
-    fn play_locally_without_the_packaged_server_names_what_is_missing() {
+    fn play_locally_without_the_server_downloads_it_and_never_launches() {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
         let mut app = Launcher::new(
@@ -1691,17 +1846,99 @@ mod tests {
         )
         .unwrap();
         app.screenshot = None;
-        app.client = std::env::temp_dir().display().to_string();
+        let dir = std::env::temp_dir().join(format!("osfr-first-use-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        app.launcher_dir = Some(dir.clone());
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        app.release = ReleaseSource {
+            api_url: format!("http://{closed}/latest"),
+            download_base: format!("http://{closed}/download"),
+        };
         app.play_locally();
         assert!(
-            app.pending_local.is_none(),
-            "nothing starts without the server files"
+            app.server_job.is_some(),
+            "the first click starts the download"
         );
-        assert!(app.local.is_none());
+        app.play_locally();
         assert!(
-            app.message.contains("server files"),
-            "the message names the missing server files: {}",
+            app.message.contains("Try again in a moment"),
+            "a second click waits: {}",
             app.message
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.server_job.is_some() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+            app.poll_server();
+        }
+        assert!(app.server_job.is_none());
+        assert!(
+            app.message.contains("Could not download the local server"),
+            "{}",
+            app.message
+        );
+        assert!(app.pending_local.is_none() && app.local.is_none() && app.child.is_none());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn server_job_messages_cover_install_update_offline_and_current() {
+        let outcome = |installed| release::Outcome {
+            tag: "v2".into(),
+            installed,
+            files_downloaded: 0,
+            bytes_downloaded: 0,
+        };
+        let mut progress = Progress::default();
+        let say = |had, progress: &Progress, done: Option<Result<release::Outcome, String>>| {
+            server_message(had, progress, done.as_ref())
+        };
+        progress.phase = "Update available";
+        assert_eq!(
+            say(true, &progress, None).unwrap(),
+            "A server update is available."
+        );
+        progress.phase = "Downloading";
+        (progress.files_done, progress.files_total) = (1, 4);
+        (progress.bytes_done, progress.bytes_total) = (1 << 20, 4 << 20);
+        assert_eq!(
+            say(true, &progress, None).unwrap(),
+            "A server update is available. Downloading: 1/4 files, 1.0 MB of 4.0 MB"
+        );
+        assert!(
+            say(false, &progress, None)
+                .unwrap()
+                .starts_with("Downloading the local server:")
+        );
+        assert_eq!(say(true, &progress, Some(Ok(outcome(false)))), None);
+        assert!(
+            say(true, &progress, Some(Ok(outcome(true))))
+                .unwrap()
+                .contains("updated to v2")
+        );
+        assert!(
+            say(false, &progress, Some(Ok(outcome(true))))
+                .unwrap()
+                .contains("v2 installed")
+        );
+        let offline = say(
+            true,
+            &progress,
+            Some(Err("Patch connection failed.".into())),
+        )
+        .unwrap();
+        assert!(offline.contains("Using the installed server"), "{offline}");
+        let first = say(
+            false,
+            &progress,
+            Some(Err("Patch connection failed.".into())),
+        )
+        .unwrap();
+        assert!(
+            first.starts_with("Could not download the local server"),
+            "{first}"
         );
     }
 
