@@ -5,7 +5,7 @@ starts its local `FreeRealms.exe`. Choose that copy and an optional locale pair
 in Settings. A realm's pinned patch manifest can install or repair files in that
 copy. It never executes a batch file or runs Python.
 
-The current W98 skin follows the owner's direction A: deep-blue glass panels,
+The current W98 skin follows design direction A: deep-blue glass panels,
 raised bumpy frames, glossy green controls, attached tabs and an imagegen forest
 backdrop. Four orange vines grow from the banner wordmark on launch. Art sources,
 hashes and slice boxes are listed in `assets/ui/README.md`; review captures and
@@ -357,7 +357,7 @@ files, and the three tables derive from the original client's own. Lead
 decision (2026-10-22): private realms (friends over a VPN, the Playtest Host
 Runbook setup) may serve the overlay. These are the same files every
 community-launcher user downloads publicly from opensourcefreerealms.com, so
-pinned redistribution to invited friends follows the owner's direction to use
+pinned redistribution to invited friends follows the project's direction to use
 community renditions of original content. A public release still waits until
 the licence is clear.
 

@@ -132,7 +132,7 @@ real-game promotional art was cut out or bundled. The generated source images,
 SHA-256 hashes, sampled magenta keys, exact slice boxes and vine root points
 are recorded in `assets/ui/README.md` and `assets/ui/slices.json`.
 
-The art direction and vine treatment are reconstructed from the owner's remembered
+The art direction and vine treatment are reconstructed from the project owner's remembered
 launcher traits and marked (R) in the rendering source; they are not recovered
 client UI code. Total bundled `assets/ui/*.png` size is reported by the W98
 launcher review record. Existing `docs/images/banner.png` remains unchanged and
