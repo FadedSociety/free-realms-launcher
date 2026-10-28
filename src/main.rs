@@ -228,10 +228,14 @@ fn start_local(
     locale: Option<&Path>,
     settings: LaunchSettings,
 ) -> Result<(Child, Responder, LocalRealm), String> {
-    let realm_dir = auth::profile_directory(LOCAL_PROFILE)
+    let realm_dir = auth::ensure_profile_directory(LOCAL_PROFILE)
         .map_err(auth_error_message)?
         .join("realm");
-    let realm = LocalRealm::start(local, client, &realm_dir).map_err(|e| e.to_string())?;
+    // The stock creator tables fail osfr-login's pin; the overlay goes into the client copy first.
+    osfr_launcher::local::ensure_creator_overlay(client).map_err(|e| e.to_string())?;
+    // Enroll before the servers start: in account-store mode osfr-login refuses a missing store
+    // and never creates one from network input. The profile keeps only the fixed local broker.
+    let broker = format!("127.0.0.1:{}", osfr_launcher::local::BROKER_PORT);
     let enrolled = realm_dir.join("enrolled");
     if !enrolled.is_file() {
         let public_key = match auth::load_profile(LOCAL_PROFILE) {
@@ -241,8 +245,8 @@ fn start_local(
                     .map_err(|e| e.to_string())?;
                 let hex: String = identity.iter().map(|b| format!("{b:02x}")).collect();
                 create_join_profile_with(
-                    &realm.login.to_string(),
-                    &realm.broker.to_string(),
+                    &broker,
+                    &broker,
                     &hex,
                     LOCAL_HANDLE,
                     LOCAL_PROFILE,
@@ -255,6 +259,7 @@ fn start_local(
         osfr_launcher::local::enroll(local, &public_key).map_err(|e| e.to_string())?;
         std::fs::write(&enrolled, b"").map_err(|e| e.to_string())?;
     }
+    let realm = LocalRealm::start(local, client, &realm_dir).map_err(|e| e.to_string())?;
     let mut login = RealmLogin {
         profile_id: LOCAL_PROFILE.into(),
     };

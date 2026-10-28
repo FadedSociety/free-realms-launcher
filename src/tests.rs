@@ -559,3 +559,15 @@ fn responder_closes_connections_past_its_cap() {
         reply().starts_with(b"HTTP/1.0 200 OK\r\n")
     }));
 }
+
+#[test]
+fn creator_overlay_pins_are_complete_relative_client_paths() {
+    for (path, pin) in crate::local::CREATOR_OVERLAY {
+        assert!(pin.len() == 64 && pin.bytes().all(|b| b.is_ascii_hexdigit()), "{path}");
+        assert!(!path.starts_with('/') && !path.contains("..") && !path.contains(':'), "{path}");
+    }
+    let tables = ["CharacterCreateCustomizationSkinTone.txt", "CharacterCreateCustomizationFaceType.txt"];
+    for table in tables {
+        assert!(crate::local::CREATOR_OVERLAY.iter().any(|(path, _)| path.ends_with(table)), "{table}");
+    }
+}

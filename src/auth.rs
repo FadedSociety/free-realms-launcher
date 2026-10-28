@@ -162,6 +162,12 @@ fn regular_private(path: &Path) -> Result<(), AuthError> {
     private_permissions(path, false)
 }
 
+/// The profile folder, created private (and checked) before anything is written into it. Local
+/// play calls this first: a folder another writer created would fail the private check.
+pub fn ensure_profile_directory(id: &str) -> Result<PathBuf, AuthError> {
+    directory(id)
+}
+
 fn directory(id: &str) -> Result<PathBuf, AuthError> {
     let directory = profile_directory(id)?;
     // Reject junctions/symlinks in every existing ancestor before creating files.

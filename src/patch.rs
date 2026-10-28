@@ -475,7 +475,7 @@ pub(crate) struct Url {
     follow: bool,
 }
 impl Url {
-    fn parse(text: &str) -> Result<Self> {
+    pub(crate) fn parse(text: &str) -> Result<Self> {
         let invalid =
             || "Patch URL must be HTTPS (HTTP is allowed only for literal loopback).".to_owned();
         if text.len() > 2048

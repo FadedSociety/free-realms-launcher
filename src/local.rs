@@ -24,6 +24,135 @@ const START_TIMEOUT: Duration = Duration::from_secs(45);
 pub const LOGIN_KEY_SHA256: &str =
     "61af8e29bc4e31ee0d642b55aca16c14fe0e25c8996cbab7ee6e558c64fa28f1";
 
+/// L024/T575: the community character-creator overlay a stock client needs (osfr-login pins the
+/// two customization tables; the stock starting-set table is empty). Client path and SHA-256 of
+/// each file, the list `scripts/bundle/client_overlay.py` pins. The launcher fetches them from the
+/// community's public host, the source every community-launcher install uses, so no release of
+/// ours carries them (README "Client overlay for the character creator").
+pub const CREATOR_OVERLAY: [(&str, &str); 22] = [
+    (
+        "Resources/CharacterCreate/CharacterCreateItemStartingSets.txt",
+        "89cc60e8979179e9af77aada3f3e8b64042757b249ee92745c361ce40b153c24",
+    ),
+    (
+        "Resources/CharacterCreateCustomizationSkinTone.txt",
+        "485d20174e96c53021d9644d3ba943f0a016fb0413d1be8fa8f728bea528dd9d",
+    ),
+    (
+        "Resources/CharacterCreateCustomizationFaceType.txt",
+        "9d4d7acd63c7926ed3d4c03f99116e929061eef4ae25e1a2b6208c738f2c8525",
+    ),
+    (
+        "custom/sg_dressing_room.gzne",
+        "bf49bec0f03aefc6d1bf14fc41049023b31f408efc0345da3f67595c3133a3c6",
+    ),
+    (
+        "custom/sg_dressing_room_0_0.gck2",
+        "19da101cd06d820983156c5c257550d3105f7e06784d30cf512e7798d4b62626",
+    ),
+    (
+        "custom/sg_dressing_room_0_0.gcnk",
+        "b914368be071c1ad1b50af6558fd6b05e09d01c08d76b278e3e14fc59e6c0aee",
+    ),
+    (
+        "custom/sg_dressing_room_0_4.gck2",
+        "5a84441f17e19390ab727fe3291080a7b428fc22b742520fc98615751e65fbba",
+    ),
+    (
+        "custom/sg_dressing_room_0_4.gcnk",
+        "81b8b0ec435fb90b0b24e4b90f54c2b5f48996ab07c5b784143a1de283a6aa83",
+    ),
+    (
+        "custom/sg_dressing_room_0_8.gck2",
+        "366c78da9bd4c2d663b09fce714398ff499497036b2c0399ef9e4f54213d2ac2",
+    ),
+    (
+        "custom/sg_dressing_room_0_8.gcnk",
+        "7a1a36c1ae9ca701eb67a469ad40f3e40f1bdc1af4d29141f80370f740a70537",
+    ),
+    (
+        "custom/sg_dressing_room_4_0.gck2",
+        "0da5ddf394aaec8be9c7f5a8d94b772c446aa001e32309fc40a8356525626d4c",
+    ),
+    (
+        "custom/sg_dressing_room_4_0.gcnk",
+        "4aa545ca68323f23a7fe9576720021edd30b9e9f83c5424fa07992c19d635291",
+    ),
+    (
+        "custom/sg_dressing_room_4_4.gck2",
+        "9860b4e2515c515053ccaaeefe32df308ceb40f1b74e94038c7d377f3c1dc342",
+    ),
+    (
+        "custom/sg_dressing_room_4_4.gcnk",
+        "c58f065fe9cb7a2664730cbf4253a5478c27f0087422b2d7aa182ad89b401530",
+    ),
+    (
+        "custom/sg_dressing_room_4_8.gck2",
+        "5a66e6629dda786f80434bac864580e5926fc5ddcb8f31fb3a4d090359340977",
+    ),
+    (
+        "custom/sg_dressing_room_4_8.gcnk",
+        "35647418448753fab50a365ec7811bdb2e978b66bc79f41eb0ce64ccba371b5a",
+    ),
+    (
+        "custom/sg_dressing_room_8_0.gck2",
+        "785717a9d939e8200f014d03cd05b785ca4cc078fe7812228a2b05433f2cd2ff",
+    ),
+    (
+        "custom/sg_dressing_room_8_0.gcnk",
+        "17eac9a5f01b9f8fb4b0adbe298a8217d32e8ad28975793ae4b957f99f973181",
+    ),
+    (
+        "custom/sg_dressing_room_8_4.gck2",
+        "9bdd369b4e2e9dd14a2c4bbd843f2b78f21f79c443c82ee18f1a3534ab9dd5ef",
+    ),
+    (
+        "custom/sg_dressing_room_8_4.gcnk",
+        "8769d331e649240c5ceed613c5430892a833bad1082dfcddc83ee2c3e129eda4",
+    ),
+    (
+        "custom/sg_dressing_room_8_8.gck2",
+        "efc6f6167180cef6976e64e0024932157b8e175fb8b2bc5598ade139702893e7",
+    ),
+    (
+        "custom/sg_dressing_room_8_8.gcnk",
+        "adb407d869408fc37bef6a9283d27c331ab92c9e3114f9146b04fbd67f99b06e",
+    ),
+];
+const OVERLAY_HOST: &str = "https://opensourcefreerealms.com/client/";
+/// Larger than any overlay file (the biggest scene chunk is a few MB).
+const OVERLAY_FILE_LIMIT: u64 = 64 << 20;
+
+/// Install every overlay file the client copy lacks or holds in another version, each checked
+/// against its pin before it is written. Files already matching are left alone, so this costs
+/// one hash per file after the first run.
+pub fn ensure_creator_overlay(client: &Path) -> io::Result<()> {
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    for (path, pin) in CREATOR_OVERLAY {
+        let target = client.join(path);
+        if fs::read(&target).is_ok_and(|bytes| crate::patch::sha256(&bytes).is_ok_and(|h| h == pin))
+        {
+            continue;
+        }
+        let url =
+            crate::patch::Url::parse(&format!("{OVERLAY_HOST}{path}")).map_err(io::Error::other)?;
+        let bytes = crate::patch::fetch_bytes(&url, OVERLAY_FILE_LIMIT, &cancel)
+            .map_err(|e| io::Error::other(format!("Could not download {path}: {e}")))?;
+        if crate::patch::sha256(&bytes).map_err(io::Error::other)? != pin {
+            return Err(io::Error::other(format!(
+                "{path} from the community host does not match its pin"
+            )));
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let staged = target.with_extension("overlay-tmp");
+        fs::write(&staged, &bytes)?;
+        fs::rename(&staged, &target)?;
+    }
+    Ok(())
+}
+
 /// Every path the local realm needs, explicit so nothing is guessed at launch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalSettings {
@@ -222,6 +351,9 @@ pub fn enroll_args(settings: &LocalSettings, public_key_hex: &str) -> Vec<String
 
 /// Enroll the local profile's public key with the bundled `osfr-account` (no console window).
 pub fn enroll(settings: &LocalSettings, public_key_hex: &str) -> io::Result<()> {
+    if let Some(parent) = settings.account_store().parent() {
+        fs::create_dir_all(parent)?;
+    }
     let mut command = Command::new(settings.bin_dir.join("osfr-account.exe"));
     command.args(enroll_args(settings, public_key_hex));
     #[cfg(windows)]
