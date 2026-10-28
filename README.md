@@ -361,6 +361,11 @@ pinned redistribution to invited friends follows the owner's direction to use
 community renditions of original content. A public release still waits until
 the licence is clear.
 
+**Local play (2026-10-28).** The launcher does not ship these files either: before it starts the
+local realm it downloads any of the 22 the player's client copy lacks straight from that same
+public community host (`CREATOR_OVERLAY` in `src/local.rs`) and writes each only after its SHA-256
+matches the pin, exactly as a community-launcher install would.
+
 **Client paths** (FreeRealms.exe). StartingSets: `./Resources/CharacterCreate/`
 (0x017e802c, set by 0x0071efb0) + the file name (0x017e8dc8, read by 0x00723e90).
 Customization tables: `Resources/` (0x017ed7d8, passed by 0x008ec05d to
