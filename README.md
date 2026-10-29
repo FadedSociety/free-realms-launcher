@@ -373,3 +373,8 @@ Customization tables: `Resources/` (0x017ed7d8, passed by 0x008ec05d to
 `.txt`; not `CharacterCreate/`, where the harness used to copy them. `custom/` is
 an ordinary folder the client's loose-file index scans (notes/Research/Native
 Character Selection Labels.md).
+
+## Licence
+
+GNU Affero General Public License v3 or later (`LICENSE`), like the Free Realms Expanded server, since 2026-10-29
+(it was MIT OR Apache-2.0 before). Anything built from this launcher must stay open under the same licence.
