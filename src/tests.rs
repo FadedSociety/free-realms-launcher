@@ -583,3 +583,38 @@ fn a_directx_dll_beside_the_client_satisfies_the_check() {
     assert!(!directx_missing(&dir));
     let _ = fs::remove_dir_all(dir);
 }
+
+/// L071: the portrait upload goes to the realm's gateway; a config without the line is unchanged.
+#[test]
+fn the_portrait_upload_points_at_the_realms_gateway() {
+    let build = |scratch: &Scratch| {
+        LaunchPlan::build(
+            &scratch.0,
+            "127.0.0.1:20042",
+            None,
+            LaunchSettings::default(),
+            &mut LocalLoginStub,
+        )
+        .unwrap()
+    };
+    let gateway = "127.0.0.1:20041".parse().unwrap();
+    for with_line in [false, true] {
+        let scratch = Scratch::new();
+        if with_line {
+            let config = scratch.0.join("ClientConfig.ini");
+            let mut text = fs::read_to_string(&config).unwrap();
+            text.push_str(
+                "[Portrait]\nUploadUrl=http://www.freerealms.com/image/imageUpload.action\n",
+            );
+            fs::write(&config, text).unwrap();
+        }
+        let plan = build(&scratch).with_portrait_upload(gateway).unwrap();
+        plan.apply().unwrap();
+        let baseline = fs::read_to_string(scratch.0.join("Baseline.ini")).unwrap();
+        assert_eq!(
+            baseline.contains("UploadUrl=http://127.0.0.1:20041/image\n"),
+            with_line,
+            "{baseline}"
+        );
+    }
+}

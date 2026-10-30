@@ -537,6 +537,26 @@ impl LaunchPlan {
         })
     }
 
+    /// L071: point the client's portrait upload (`[Portrait] UploadUrl`) at the realm's gateway,
+    /// which serves `/image` on its own port. A config without that line is left as it is; the
+    /// offline rewrite otherwise sends uploads to a dead address.
+    pub fn with_portrait_upload(mut self, gateway: std::net::SocketAddr) -> Result<Self> {
+        if let Some(change) = self
+            .changes
+            .iter_mut()
+            .find(|change| change.relative == "Baseline.ini")
+        {
+            let text = String::from_utf8(change.contents.clone())
+                .map_err(|_| "Baseline.ini is not UTF-8.")?;
+            if text.lines().any(|line| line.starts_with("UploadUrl=")) {
+                change.contents =
+                    replace_setting(&text, "UploadUrl", &format!("http://{gateway}/image"))?
+                        .into_bytes();
+            }
+        }
+        Ok(self)
+    }
+
     pub fn changed_files(&self) -> impl Iterator<Item = &str> {
         self.changes.iter().map(|change| change.relative.as_str())
     }

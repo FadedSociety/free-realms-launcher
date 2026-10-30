@@ -485,6 +485,8 @@ fn free_udp_port() -> io::Result<SocketAddr> {
 /// The running local realm. Dropping it stops both servers.
 pub struct LocalRealm {
     children: Vec<Child>,
+    /// L071: the client uploads its portrait to the gateway's port.
+    pub gateway: SocketAddr,
     pub login: SocketAddr,
     pub broker: SocketAddr,
     pub log_dir: PathBuf,
@@ -532,6 +534,7 @@ impl LocalRealm {
         let identity = server_identity(&plan.server_id)?;
         let mut realm = Self {
             children: Vec::new(),
+            gateway: plan.gateway,
             login: plan.login,
             broker: plan.broker,
             log_dir,
@@ -762,6 +765,7 @@ mod tests {
         let id = child.id();
         let realm = LocalRealm {
             children: vec![child],
+            gateway: "127.0.0.1:1".parse().unwrap(),
             login: "127.0.0.1:1".parse().unwrap(),
             broker: "127.0.0.1:1".parse().unwrap(),
             log_dir: PathBuf::new(),

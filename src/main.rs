@@ -289,7 +289,8 @@ fn start_local(
         locale,
         settings,
         &mut login,
-    )?;
+    )?
+    .with_portrait_upload(realm.gateway)?;
     plan.apply()?;
     let (child, responder) = plan.launch()?;
     Ok((child, responder, realm))
@@ -674,6 +675,14 @@ impl Launcher {
                 profile_id,
                 broker: None,
             });
+            // L071: a hosted realm (login on 20042) takes portraits on its gateway port, 20041.
+            let gateway = address
+                .parse::<std::net::SocketAddr>()
+                .ok()
+                .filter(|login| login.port() == osfr_launcher::local::LOGIN_PORT)
+                .map(|login| {
+                    std::net::SocketAddr::new(login.ip(), osfr_launcher::local::GATEWAY_PORT)
+                });
             let result = LaunchPlan::build(
                 &client,
                 &address,
@@ -681,6 +690,10 @@ impl Launcher {
                 settings,
                 login.as_mut(),
             )
+            .and_then(|plan| match gateway {
+                Some(gateway) => plan.with_portrait_upload(gateway),
+                None => Ok(plan),
+            })
             .and_then(|plan| {
                 plan.apply()?;
                 plan.launch()
