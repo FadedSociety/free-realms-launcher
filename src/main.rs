@@ -583,6 +583,9 @@ pub(crate) struct Launcher {
     host: bool,
     host_choices: Vec<std::net::IpAddr>,
     host_address: Option<std::net::IpAddr>,
+    /// L075: host on the internet (router port forwarding or a server host) at `host_public`.
+    host_internet: bool,
+    host_public: String,
     /// L070: the last PLAY stopped on a missing DirectX runtime; the installer link shows.
     directx_missing: bool,
     client_job: Option<ClientJob>,
@@ -654,6 +657,8 @@ impl Launcher {
             host: false,
             host_choices: Vec::new(),
             host_address: None,
+            host_internet: false,
+            host_public: String::new(),
             directx_missing: false,
             client_job: None,
         })
@@ -758,7 +763,18 @@ impl Launcher {
             self.start_server_job(true);
             return;
         }
-        if self.host {
+        if self.host && self.host_internet {
+            match self.host_public.trim().parse::<std::net::IpAddr>() {
+                Ok(ip) if !ip.is_unspecified() && !ip.is_loopback() && !ip.is_multicast() => {
+                    local.host = Some(std::net::IpAddr::from([0, 0, 0, 0]));
+                    local.public = Some(ip);
+                }
+                _ => {
+                    self.message = "Enter your public IP (search \"what is my IP\") to host on the internet.".into();
+                    return;
+                }
+            }
+        } else if self.host {
             let Some(address) = self.host_address else {
                 self.message = "No LAN or VPN address found to host on. Join a network (or start Tailscale) first.".into();
                 return;
@@ -1391,6 +1407,24 @@ impl Launcher {
             self.host_address = self.host_choices.first().copied();
         }
         if self.host && idle {
+            ui.checkbox(
+                &mut self.host_internet,
+                "On the internet (port forwarding or a server host)",
+            );
+            if self.host_internet {
+                ui.horizontal(|ui| {
+                    ui.label("Your public IP");
+                    ui.text_edit_singleline(&mut self.host_public);
+                });
+                ui.small(format!(
+                    "Forward these ports to this PC on your router (or open them at your server host): UDP {g} and {l}, TCP {g} and {b}. Players join at your public IP, port {l}.",
+                    g = osfr_launcher::local::GATEWAY_PORT,
+                    l = osfr_launcher::local::LOGIN_PORT,
+                    b = osfr_launcher::local::BROKER_PORT,
+                ));
+            }
+        }
+        if self.host && idle && !self.host_internet {
             if self.host_choices.len() > 1 {
                 let shown = self
                     .host_address
@@ -1413,18 +1447,25 @@ impl Launcher {
             };
         }
         if let Some(realm) = &self.local {
-            if !realm.login.ip().is_loopback() {
+            // L075: an internet-hosted realm is joined at the public IP, not this PC's loopback.
+            let public = self.host_public.trim().parse::<std::net::IpAddr>().ok();
+            let shown = match public {
+                Some(ip) if self.host && self.host_internet => {
+                    Some(std::net::SocketAddr::new(ip, osfr_launcher::local::LOGIN_PORT))
+                }
+                _ => (!realm.login.ip().is_loopback()).then_some(realm.login),
+            };
+            if let Some(address) = shown {
                 ui.small(format!(
                     "Hosting at {} (fingerprint {})",
-                    realm.login,
+                    address,
                     short_fingerprint(&realm.identity)
                 ));
                 if ui.button("Copy join details").clicked() {
                     let identity: String =
                         realm.identity.iter().map(|b| format!("{b:02x}")).collect();
                     ui.ctx().copy_text(format!(
-                        "Realm address: {}\nServer identity: {identity}",
-                        realm.login
+                        "Realm address: {address}\nServer identity: {identity}"
                     ));
                     self.message = "Join details copied. Send them to your friends.".into();
                 }

@@ -24,8 +24,8 @@ Return to **Realms** and choose the saved account beside PLAY.
 The trusted server identity is the one you saved: pasted from the host, or
 fetched once and checked by its fingerprint. Login refuses any other identity.
 Login goes to the realm's AUTH2 broker: by default the game address's IP at port
-20043, and only a loopback or private/VPN address (`default_broker` in
-`src/main.rs`, `broker_ip_allowed` in `src/auth.rs`). The host must enroll the
+20043, given as an IP literal (`default_broker` in `src/main.rs`, `broker_ip_allowed` in
+`src/auth.rs`; since v0.2.2 public addresses are allowed, wildcard, multicast and link-local are not). The host must enroll the
 public key for the supplied account handle. A refused login explains that the
 host may still need to add the key. The broker intentionally returns one
 generic refusal for unknown, disabled, wrong-key and locked accounts.
@@ -95,8 +95,16 @@ its Tailscale (100.64.0.0/10) address when one is up, on ports 20041 (game, UDP)
 networks. While hosting, the launcher shows the address and the server fingerprint, and **Copy join details**
 copies both for your friends. The realm is open: a friend's first login makes their player account, at most
 three new accounts an hour from one address and 64 in all. To let only certain players in, list their handles,
-one per line, in `server/state/whitelist.txt`. Your own account is the realm's admin. Public internet addresses
-are refused; friends outside your network join through a VPN such as Tailscale.
+one per line, in `server/state/whitelist.txt`. Your own account is the realm's admin.
+
+### Host on the internet (port forwarding or a server host)
+
+Tick **On the internet** under Host for friends and enter your public IP (search "what is my IP"). Then forward
+these ports from your router to this PC, or open them at your server host: **UDP 20041 and 20042, TCP 20041 and
+20043**. The realm listens on every network address, players join at `<your public IP>:20042` with the server
+identity from **Copy join details**, and your own game keeps using this PC directly, so it works even when the
+router cannot loop back to its own public address. The same account limits, whitelist and key-pair logins apply.
+The game's own network traffic is not encrypted (the original client's protocol); logins never send a password.
 
 ### No client yet?
 

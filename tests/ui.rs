@@ -170,11 +170,16 @@ fn key_generation_errors_keep_auth_error_messages() {
 }
 
 #[test]
-fn broker_defaults_to_the_realm_host_and_refuses_public_hosts() {
+fn broker_defaults_to_the_realm_host_and_refuses_unusable_hosts() {
     assert_eq!(app::default_broker("10.0.0.5:20042"), "10.0.0.5:20043");
     assert_eq!(app::default_broker("[fd12::7]:20042"), "[fd12::7]:20043");
     assert_eq!(app::default_broker("not an address"), "127.0.0.1:20043");
-    for (broker, ok) in [("100.64.0.9:20043", true), ("8.8.8.8:20043", false)] {
+    // L075: a public (port-forwarded or hosted) realm is a valid broker; wildcard is not.
+    for (broker, ok) in [
+        ("100.64.0.9:20043", true),
+        ("8.8.8.8:20043", true),
+        ("0.0.0.0:20043", false),
+    ] {
         let result = app::create_join_profile_with(
             "100.64.0.9:20042",
             broker,

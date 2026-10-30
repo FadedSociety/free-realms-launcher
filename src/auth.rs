@@ -1,6 +1,6 @@
 //! (R) Per-server key-pair login, per notes/Research/Key-pair Login Contract.md.
 //! This is reconstructed authentication, not the historical account service.
-//! Brokers must be loopback or a private-network literal (LAN or VPN); never public.
+//! Brokers are IP literals: loopback, LAN, VPN or, since L075, a public (port-forwarded or hosted) realm.
 
 use crate::SessionToken;
 use ed25519_dalek::{Signer, SigningKey};
@@ -109,16 +109,17 @@ impl Profile {
     }
 }
 
-/// Security Model decision 2 (2026-10-16): loopback, RFC 1918, the VPN shared
-/// space 100.64.0.0/10, or IPv6 unique-local. Public, wildcard and link-local
-/// addresses stay refused; AUTH2 still pins the server identity on top.
+/// Security Model decision 2 (2026-10-16) kept public brokers closed; the owner opened them on
+/// 2026-10-30 (L075) for port-forwarded and hosted realms. AUTH2 pins the server identity either
+/// way; wildcard, multicast, broadcast and link-local addresses stay refused.
 fn broker_ip_allowed(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
-            let [a, b, ..] = v4.octets();
-            v4.is_loopback() || v4.is_private() || (a == 100 && (64..128).contains(&b))
+            !(v4.is_unspecified() || v4.is_multicast() || v4.is_broadcast() || v4.is_link_local())
         }
-        IpAddr::V6(v6) => v6.is_loopback() || (v6.segments()[0] & 0xfe00) == 0xfc00,
+        IpAddr::V6(v6) => {
+            !(v6.is_unspecified() || v6.is_multicast() || (v6.segments()[0] & 0xffc0) == 0xfe80)
+        }
     }
 }
 

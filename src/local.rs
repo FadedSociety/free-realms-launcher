@@ -176,6 +176,10 @@ pub struct LocalSettings {
     /// A hosted realm is open: a friend's first login makes their account, unless the
     /// `whitelist.txt` beside the account store lists the handles that may join.
     pub host: Option<IpAddr>,
+    /// L075 (owner 2026-10-30): the public IP players outside reach this PC at (the router's, with
+    /// ports forwarded). With it the realm binds 0.0.0.0 (`host` is `0.0.0.0`), the servers run with
+    /// `--allow-public`, and login hands outside players this address for the gateway.
+    pub public: Option<IpAddr>,
 }
 
 impl LocalSettings {
@@ -193,6 +197,7 @@ impl LocalSettings {
             world: optional("world"),
             dev_tools: false,
             host: None,
+            public: None,
         }
     }
 
@@ -310,7 +315,9 @@ pub fn gateway_args(settings: &LocalSettings, client: &Path, plan: &RunPlan) -> 
     if let Some(terrain) = &settings.terrain {
         args.extend(["--terrain".into(), path(terrain)]);
     }
-    if settings.host.is_some() {
+    if settings.public.is_some() {
+        args.push("--allow-public".into());
+    } else if settings.host.is_some() {
         args.push("--allow-lan".into());
     }
     if settings.dev_tools {
@@ -335,7 +342,7 @@ pub fn login_args(settings: &LocalSettings, client: &Path, plan: &RunPlan) -> Ve
         "--auth-bind".into(),
         plan.broker.to_string(),
         "--gateway".into(),
-        plan.gateway.to_string(),
+        reach(plan.gateway).to_string(),
         "--resources".into(),
         path(&client.join("Resources")),
         "--identity".into(),
@@ -353,8 +360,16 @@ pub fn login_args(settings: &LocalSettings, client: &Path, plan: &RunPlan) -> Ve
         "--seconds".into(),
         "0".into(),
     ];
-    if settings.host.is_some() {
+    if let Some(public) = settings.public {
+        args.extend([
+            "--allow-public".into(),
+            "--advertise".into(),
+            SocketAddr::new(public, GATEWAY_PORT).to_string(),
+        ]);
+    } else if settings.host.is_some() {
         args.push("--allow-lan".into());
+    }
+    if settings.host.is_some() {
         let whitelist = settings.whitelist();
         if whitelist.is_file() {
             args.extend(["--enroll-handles".into(), path(&whitelist)]);
@@ -537,9 +552,9 @@ impl LocalRealm {
         let identity = server_identity(&plan.server_id)?;
         let mut realm = Self {
             children: Vec::new(),
-            gateway: plan.gateway,
-            login: plan.login,
-            broker: plan.broker,
+            gateway: reach(plan.gateway),
+            login: reach(plan.login),
+            broker: reach(plan.broker),
             log_dir,
             identity,
         };
@@ -553,7 +568,7 @@ impl LocalRealm {
         let login = login_args(settings, client, &plan);
         realm.spawn(&settings.bin_dir.join("osfr-login.exe"), &login, "login")?;
         realm.wait(
-            || TcpStream::connect_timeout(&plan.broker, Duration::from_millis(200)).is_ok(),
+            || TcpStream::connect_timeout(&reach(plan.broker), Duration::from_millis(200)).is_ok(),
             "login",
         )?;
         Ok(realm)
@@ -610,6 +625,15 @@ impl LocalRealm {
     }
 }
 
+/// L075: this PC reaches a wildcard-bound (internet-hosted) server on loopback.
+pub fn reach(address: SocketAddr) -> SocketAddr {
+    if address.ip().is_unspecified() {
+        SocketAddr::from(([127, 0, 0, 1], address.port()))
+    } else {
+        address
+    }
+}
+
 /// A UDP port is taken once the server has bound it.
 fn udp_taken(address: SocketAddr) -> bool {
     UdpSocket::bind(address).is_err()
@@ -642,6 +666,29 @@ mod tests {
             handoff_key: PathBuf::from(r"C:\realm\handoff.key"),
             log_dir: PathBuf::from(r"C:\realm\logs"),
         }
+    }
+
+    #[test]
+    fn internet_hosting_binds_everywhere_and_advertises_the_public_gateway() {
+        let mut s = settings();
+        s.host = Some("0.0.0.0".parse().unwrap());
+        s.public = Some("203.0.113.7".parse().unwrap());
+        let mut p = plan();
+        p.gateway = "0.0.0.0:20041".parse().unwrap();
+        p.login = "0.0.0.0:20042".parse().unwrap();
+        p.broker = "0.0.0.0:20043".parse().unwrap();
+        let client = Path::new(r"C:\client");
+        let gateway = gateway_args(&s, client, &p);
+        assert_eq!(gateway[0], "0.0.0.0:20041");
+        assert!(gateway.iter().any(|a| a == "--allow-public"));
+        assert!(!gateway.iter().any(|a| a == "--allow-lan"));
+        let login = login_args(&s, client, &p);
+        let after = |flag: &str| login[login.iter().position(|a| a == flag).unwrap() + 1].clone();
+        assert_eq!(after("--bind"), "0.0.0.0:20042");
+        assert_eq!(after("--gateway"), "127.0.0.1:20041", "the host's own client uses loopback");
+        assert_eq!(after("--advertise"), "203.0.113.7:20041");
+        assert!(login.iter().any(|a| a == "--open-enrollment"));
+        assert_eq!(reach(p.broker), "127.0.0.1:20043".parse().unwrap());
     }
 
     #[test]

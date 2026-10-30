@@ -59,14 +59,17 @@ fn trickled_bytes_cannot_extend_the_deadline() {
 }
 
 #[test]
-fn profile_validation_and_cli_reject_paths_and_remote_brokers() {
+fn profile_validation_and_cli_reject_paths_and_unusable_brokers() {
     for id in ["..", "CON", "COM1", "NUL", "c:escape", "a/b", "a\\b"] {
         assert_eq!(valid_id(id), Err(AuthError::InvalidProfile));
     }
-    for endpoint in ["192.0.2.1:1", "localhost:1", "127.0.0.1:0", "[::]:1"] {
+    for endpoint in ["224.0.0.1:1", "localhost:1", "127.0.0.1:0", "[::]:1", "169.254.1.1:1"] {
         assert!(Profile::new("fixture", "Fixture realm", endpoint, [42; 32], "acct_001").is_err());
     }
-    assert!(Profile::new("fixture", "Fixture realm", "[::1]:1", [42; 32], "acct_001").is_ok());
+    // L075: a port-forwarded or hosted realm's public address is a valid broker.
+    for endpoint in ["[::1]:1", "192.0.2.1:20043"] {
+        assert!(Profile::new("fixture", "Fixture realm", endpoint, [42; 32], "acct_001").is_ok());
+    }
     assert!(crate::key_command(["--new-key"]).unwrap().is_err());
     assert!(
         crate::key_command(["--print-public-key", "fixture", "extra"])
@@ -77,10 +80,10 @@ fn profile_validation_and_cli_reject_paths_and_remote_brokers() {
 }
 
 /// L070 join by address: the realm's answer to a challenge carries its identity, which the
-/// player compares (as a fingerprint) with the host's before a profile pins it. Public and
-/// malformed broker addresses are refused before any connection.
+/// player compares (as a fingerprint) with the host's before a profile pins it. Wildcard,
+/// multicast, name and malformed broker addresses are refused before any connection.
 #[test]
-fn fetch_identity_reads_the_challenge_identity_and_refuses_public_brokers() {
+fn fetch_identity_reads_the_challenge_identity_and_refuses_unusable_brokers() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let server = thread::spawn(move || {
@@ -95,7 +98,7 @@ fn fetch_identity_reads_the_challenge_identity_and_refuses_public_brokers() {
     });
     assert_eq!(fetch_identity(&address.to_string()), Ok([7; 32]));
     server.join().unwrap();
-    for broker in ["8.8.8.8:20043", "0.0.0.0:20043", "realm.example:20043", ""] {
+    for broker in ["224.0.0.1:20043", "0.0.0.0:20043", "realm.example:20043", ""] {
         assert_eq!(
             fetch_identity(broker),
             Err(AuthError::InvalidProfile),
