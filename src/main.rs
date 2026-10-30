@@ -2,6 +2,7 @@
 
 mod controller;
 mod diagnostics;
+mod redesign;
 mod theme;
 
 use controller::{Controller, Navigation};
@@ -464,6 +465,7 @@ pub(crate) enum FocusTarget {
     Back,
 }
 
+#[cfg(test)]
 pub(crate) fn focus_order(
     settings: bool,
     realm_count: usize,
@@ -512,6 +514,7 @@ pub(crate) fn focus_order(
     order
 }
 
+#[cfg(test)]
 pub(crate) fn focus_sequence_matches(
     actual: &[FocusTarget],
     settings: bool,
@@ -554,6 +557,8 @@ pub(crate) struct Launcher {
     settings_page: bool,
     /// Redesign 2026-10-30: the Host tab (hosting controls, setup check, HOST & PLAY).
     host_page: bool,
+    /// v0.3.1: the realm chooser over the hero scene (Change).
+    realm_popup: bool,
     /// Redesign 2026-10-30: release news for the Play tab, fetched once in the background.
     news: Vec<osfr_launcher::release::NewsItem>,
     news_rx: Option<mpsc::Receiver<Vec<osfr_launcher::release::NewsItem>>>,
@@ -636,6 +641,7 @@ impl Launcher {
             settings: LaunchSettings::default(),
             settings_page,
             host_page: false,
+            realm_popup: false,
             news: Vec::new(),
             news_rx: {
                 let (tx, rx) = mpsc::channel();
@@ -1255,344 +1261,6 @@ impl Launcher {
         }
     }
 
-    /// Redesign 2026-10-30: wide windows put the realms on the left and the cast over the play
-    /// dock on the right; narrow ones (handhelds, small windows) stack them.
-    fn home(&mut self, ui: &mut egui::Ui) {
-        let compact = ui.ctx().content_rect().height() < 650.0;
-        if !compact && ui.available_width() >= 820.0 {
-            ui.columns(2, |cols| {
-                self.home_realms(&mut cols[0]);
-                self.play_dock(&mut cols[1], compact, true);
-            });
-        } else {
-            self.home_realms(ui);
-            self.play_dock(ui, compact, false);
-        }
-    }
-
-    fn home_realms(&mut self, ui: &mut egui::Ui) {
-        let compact = ui.ctx().content_rect().height() < 650.0;
-        theme::heading(
-            ui,
-            "Your next adventure starts here",
-            if compact {
-                ""
-            } else {
-                "Choose a realm, then jump into Free Realms."
-            },
-        );
-        if !compact {
-            ui.horizontal(|ui| {
-                let (icon, _) = ui.allocate_exact_size(Vec2::splat(27.0), egui::Sense::hover());
-                self.art.icon(ui.painter(), 0, icon);
-                ui.label(RichText::new("Realms").font(theme::display(22.0)));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.small("Status / players: not connected yet");
-                });
-            });
-        }
-        let row_height = if compact { 56.0 } else { 60.0 };
-        let row_width = ui.available_width();
-        for index in 0..self.servers.len() {
-            let server = &self.servers[index];
-            let name = if index == self.selected {
-                format!("Selected: {}", server.name)
-            } else {
-                server.name.clone()
-            };
-            let address = server.address.clone();
-            let row = theme::row_button(
-                ui,
-                &self.art,
-                &name,
-                &address,
-                Vec2::new(row_width, row_height),
-            );
-            self.record_focus(FocusTarget::RealmRow(index), &row);
-            if row.clicked() {
-                self.selected = index;
-            }
-        }
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            let add_width = 142.0;
-            let field_width = (ui.available_width() - add_width - 8.0).max(160.0);
-            let field = theme::text_field(
-                ui,
-                &self.art,
-                &mut self.new_address,
-                "Add host:port",
-                Vec2::new(field_width, if compact { 38.0 } else { 48.0 }),
-                261,
-            );
-            self.record_focus(FocusTarget::AddAddress, &field);
-            let add = theme::button(
-                ui,
-                &self.art,
-                "Add realm",
-                Vec2::new(add_width, if compact { 38.0 } else { 48.0 }),
-                self.servers.len() < 16,
-                theme::ButtonSkin::Standard,
-            );
-            self.record_focus(FocusTarget::AddRealm, &add);
-            if add.clicked() {
-                match osfr_launcher::validate_endpoint(&self.new_address) {
-                    Ok(()) => {
-                        self.servers.push(Server {
-                            name: "Custom realm".into(),
-                            address: self.new_address.clone(),
-                            profile_id: String::new(),
-                            patch: PatchSource::default(),
-                        });
-                        self.selected = self.servers.len() - 1;
-                        self.new_address.clear();
-                        self.message = "Realm added. Select a saved profile or Local login.".into();
-                    }
-                    Err(error) => self.message = error,
-                }
-            }
-        });
-        self.patch_progress_ui(ui);
-        if !self.news.is_empty() {
-            ui.add_space(8.0);
-            ui.label(RichText::new("News & updates").font(theme::display(20.0)));
-            for item in &self.news {
-                ui.horizontal(|ui| {
-                    ui.small(&item.date);
-                    if item.url.is_empty() {
-                        ui.label(&item.title);
-                    } else {
-                        ui.hyperlink_to(&item.title, &item.url);
-                    }
-                });
-            }
-            ui.hyperlink_to(
-                "All updates on GitHub",
-                "https://github.com/FadedSociety/free-realms-expanded/releases",
-            );
-        }
-    }
-
-    fn play_dock(&mut self, ui: &mut egui::Ui, compact: bool, wide: bool) {
-        if wide {
-            let [tw, th] = self.art.hero().size();
-            let width = ui.available_width();
-            let height = (width * th as f32 / tw as f32).min(240.0);
-            let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
-            let size = Vec2::new(height * tw as f32 / th as f32, height);
-            ui.painter().image(
-                self.art.hero().id(),
-                egui::Rect::from_center_size(rect.center(), size),
-                theme::unit_uv(),
-                Color32::WHITE,
-            );
-        }
-        ui.add_space(if compact { 2.0 } else { 8.0 });
-        let layout = if wide {
-            egui::Layout::top_down(egui::Align::Center)
-        } else {
-            egui::Layout::left_to_right(egui::Align::Center)
-        };
-        ui.with_layout(layout, |ui| {
-            let label = if self.child.is_some() {
-                "GAME RUNNING"
-            } else if self.pending.is_some() {
-                "PREPARING..."
-            } else if self.patch_job.is_some() || self.patch_preview {
-                "PATCHING..."
-            } else {
-                "PLAY NOW!"
-            };
-            let play = theme::button(
-                ui,
-                &self.art,
-                label,
-                if wide {
-                    Vec2::new(ui.available_width().min(420.0), 84.0)
-                } else if compact {
-                    Vec2::new(208.0, 52.0)
-                } else {
-                    Vec2::new(224.0, 64.0)
-                },
-                self.pending.is_none()
-                    && self.child.is_none()
-                    && self.patch_allows_play()
-                    && (self.screenshot.is_none() || self.focus_play_on_start),
-                theme::ButtonSkin::Play,
-            );
-            self.record_focus(FocusTarget::Play, &play);
-            if self.focus_play_on_start && !self.focus_play_requested {
-                ui.ctx().memory_mut(|memory| memory.request_focus(play.id));
-                self.focus_play_requested = true;
-            }
-            if self.focus_play_on_start && !play.has_focus() {
-                for shape in theme::focus_shapes(play.rect) {
-                    ui.painter().add(shape);
-                }
-            }
-            if play.clicked() {
-                self.play();
-            }
-            // T771: runs the server beside the launcher; the first click downloads it from GitHub.
-            if let Some(root) = &self.launcher_dir {
-                let label = if LocalSettings::packaged(root).missing().is_empty() {
-                    "Play locally (no host needed)"
-                } else {
-                    "Play locally (downloads the server first)"
-                };
-                let idle = self.pending.is_none()
-                    && self.pending_local.is_none()
-                    && self.child.is_none()
-                    && self.server_job.is_none();
-                if ui.add_enabled(idle, egui::Button::new(label)).clicked() {
-                    self.play_locally();
-                }
-            }
-            ui.vertical(|ui| {
-                let id = &mut self.servers[self.selected].profile_id;
-                let label = profile_label(id, &self.profiles);
-                let profile = egui::ComboBox::from_id_salt("login-profile")
-                    .selected_text(label)
-                    .width(ui.available_width().min(300.0))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(id, String::new(), "Local login");
-                        for (value, name) in &self.profiles {
-                            ui.selectable_value(id, value.clone(), name);
-                        }
-                    });
-                self.record_focus(FocusTarget::LoginProfile, &profile.response);
-                ui.small("Saved key-pair profiles or loopback-only local login.");
-            });
-        });
-    }
-
-    /// Redesign 2026-10-30: the Host tab. Hosting controls, a setup check (ring dots) and HOST & PLAY.
-    fn host_page_ui(&mut self, ui: &mut egui::Ui) {
-        theme::heading(
-            ui,
-            "Host a realm",
-            "Run a realm on this PC for friends on your network or over the internet.",
-        );
-        let Some(root) = self.launcher_dir.clone() else {
-            return;
-        };
-        self.host_ui(ui);
-        ui.add_space(8.0);
-        let server_ok = LocalSettings::packaged(&root).missing().is_empty();
-        let client_ok = !self.client.trim().is_empty();
-        let ip_ok = !self.host_internet || self.host_public.trim().parse::<std::net::IpAddr>().is_ok();
-        for (ok, text) in [
-            (self.host, "Host for friends is ticked"),
-            (server_ok, "Server installed (the first Play locally downloads it)"),
-            (client_ok, "Client folder chosen (Settings)"),
-            (ip_ok, "Public IP entered (internet hosting)"),
-        ] {
-            ui.horizontal(|ui| {
-                let (rect, _) = ui.allocate_exact_size(Vec2::splat(22.0), egui::Sense::hover());
-                self.art.pip(ui.painter(), if ok { 0 } else { 2 }, rect);
-                ui.label(text);
-            });
-        }
-        ui.add_space(8.0);
-        let idle = self.pending.is_none()
-            && self.pending_local.is_none()
-            && self.child.is_none()
-            && self.server_job.is_none();
-        let go = theme::button(
-            ui,
-            &self.art,
-            "HOST & PLAY",
-            Vec2::new(ui.available_width().min(380.0), 76.0),
-            idle && self.host,
-            theme::ButtonSkin::Play,
-        );
-        if go.clicked() {
-            self.play_locally();
-        }
-    }
-
-    /// L070: "Play locally" hosts friends on this PC's LAN or VPN address. The realm is open (a
-    /// friend's first login makes their account) unless `server/state/whitelist.txt` lists handles.
-    fn host_ui(&mut self, ui: &mut egui::Ui) {
-        let idle = self.pending_local.is_none() && self.local.is_none();
-        let toggle = ui.add_enabled(
-            idle && self.screenshot.is_none(),
-            egui::Checkbox::new(&mut self.host, "Host for friends (LAN or VPN)"),
-        );
-        if toggle.changed() && self.host {
-            self.host_choices = osfr_launcher::local::host_addresses();
-            self.host_address = self.host_choices.first().copied();
-        }
-        if self.host && idle {
-            ui.checkbox(
-                &mut self.host_internet,
-                "On the internet (port forwarding or a server host)",
-            );
-            if self.host_internet {
-                ui.label("Your public IP");
-                // The themed field (dark text) under a layout-independent id: opening a touch
-                // keyboard resizes the window, and an auto id would lose focus and close it.
-                let (art, value) = (&self.art, &mut self.host_public);
-                ui.scope_builder(egui::UiBuilder::new().id("host-public-ip"), |ui| {
-                    theme::text_field(ui, art, value, "e.g. 203.0.113.7", Vec2::new(260.0, 44.0), 45)
-                });
-                ui.small(format!(
-                    "Forward these ports to this PC on your router (or open them at your server host): UDP {g} and {l}, TCP {g} and {b}. Players join at your public IP, port {l}.",
-                    g = osfr_launcher::local::GATEWAY_PORT,
-                    l = osfr_launcher::local::LOGIN_PORT,
-                    b = osfr_launcher::local::BROKER_PORT,
-                ));
-            }
-        }
-        if self.host && idle && !self.host_internet {
-            if self.host_choices.len() > 1 {
-                let shown = self
-                    .host_address
-                    .map(|ip| ip.to_string())
-                    .unwrap_or_default();
-                egui::ComboBox::from_id_salt("host-address")
-                    .selected_text(shown)
-                    .show_ui(ui, |ui| {
-                        for ip in &self.host_choices {
-                            ui.selectable_value(&mut self.host_address, Some(*ip), ip.to_string());
-                        }
-                    });
-            }
-            match self.host_address {
-                Some(ip) => ui.small(format!(
-                    "Friends join at {ip}:{}. Windows asks once to let the realm through its firewall: allow private networks.",
-                    osfr_launcher::local::LOGIN_PORT
-                )),
-                None => ui.small("No LAN or VPN address found. Join a network or start Tailscale."),
-            };
-        }
-        if let Some(realm) = &self.local {
-            // L075: an internet-hosted realm is joined at the public IP, not this PC's loopback.
-            let public = self.host_public.trim().parse::<std::net::IpAddr>().ok();
-            let shown = match public {
-                Some(ip) if self.host && self.host_internet => {
-                    Some(std::net::SocketAddr::new(ip, osfr_launcher::local::LOGIN_PORT))
-                }
-                _ => (!realm.login.ip().is_loopback()).then_some(realm.login),
-            };
-            if let Some(address) = shown {
-                ui.small(format!(
-                    "Hosting at {} (fingerprint {})",
-                    address,
-                    short_fingerprint(&realm.identity)
-                ));
-                if ui.button("Copy join details").clicked() {
-                    let identity: String =
-                        realm.identity.iter().map(|b| format!("{b:02x}")).collect();
-                    ui.ctx().copy_text(format!(
-                        "Realm address: {address}\nServer identity: {identity}"
-                    ));
-                    self.message = "Join details copied. Send them to your friends.".into();
-                }
-            }
-        }
-    }
-
     pub(crate) fn join_realm_ui(&mut self, ui: &mut egui::Ui, compact: bool) {
         ui.label(
             RichText::new("Join a realm").font(theme::display(if compact { 22.0 } else { 25.0 })),
@@ -1958,151 +1626,12 @@ impl eframe::App for Launcher {
                 Ok(None) => (),
             }
         }
-        let rendered_settings = self.settings_page;
-        let rendered_host = self.host_page && !rendered_settings;
-        let rendered_realms = self.servers.len();
         self.focus_targets.clear();
         self.art.draw_backdrop(
             &ctx.layer_painter(egui::LayerId::background()),
             ctx.content_rect(),
         );
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(Color32::TRANSPARENT).inner_margin(10))
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    let width = ui.available_width().min(1080.0);
-                    ui.set_max_width(width);
-                    let compact = ctx.content_rect().height() < 650.0;
-                    if compact {
-                        ui.spacing_mut().item_spacing.y = 4.0;
-                    }
-                    let banner_height = (width / 3.0).min(if compact {
-                        if rendered_settings { 28.0 } else { 62.0 }
-                    } else if rendered_settings {
-                        118.0
-                    } else {
-                        220.0
-                    })
-                    // The wordmark never takes more than a fifth of the window (handhelds).
-                    .min(ctx.content_rect().height() * 0.2);
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                        let [logo_w, logo_h] = self.banner.size();
-                        let banner_rect = ui
-                            .allocate_exact_size(
-                                Vec2::new(banner_height * logo_w as f32 / logo_h as f32, banner_height),
-                                egui::Sense::hover(),
-                            )
-                            .0;
-                        ui.painter().image(
-                            self.banner.id(),
-                            banner_rect,
-                            theme::unit_uv(),
-                            Color32::WHITE,
-                        );
-                    });
-                    ui.add_space(2.0);
-                    let panel_slot = ui.painter().add(egui::Shape::Noop);
-                    let panel = theme::panel()
-                        .inner_margin(egui::Margin {left:32,right:32,top:12,bottom:12})
-                        .show(ui, |ui| {
-                            ui.set_min_width(ui.available_width());
-                            ui.horizontal(|ui| {
-                                let realms = theme::button(
-                                    ui,
-                                    &self.art,
-                                    "Play",
-                                    Vec2::new(132.0, if compact { 40.0 } else { 48.0 }),
-                                    true,
-                                    theme::ButtonSkin::Tab { selected: !rendered_settings },
-                                );
-                                self.record_focus(FocusTarget::RealmsTab, &realms);
-                                self.art.icon(
-                                    ui.painter(),
-                                    0,
-                                    egui::Rect::from_center_size(
-                                        egui::pos2(realms.rect.left() + 23.0, realms.rect.center().y),
-                                        Vec2::new(22.0, 24.0),
-                                    ),
-                                );
-                                if realms.clicked() {
-                                    self.settings_page = false;
-                                    self.host_page = false;
-                                }
-                                // ponytail: the Host tab is touch/mouse only for now; controller focus walks
-                                // Play and Settings (add FocusTarget::HostTab with its focus_order tests).
-                                let host = theme::button(
-                                    ui,
-                                    &self.art,
-                                    "Host",
-                                    Vec2::new(120.0, if compact { 40.0 } else { 48.0 }),
-                                    self.launcher_dir.is_some(),
-                                    theme::ButtonSkin::Tab { selected: rendered_host },
-                                );
-                                if host.clicked() {
-                                    self.settings_page = false;
-                                    self.host_page = true;
-                                }
-                                let settings = theme::button(
-                                    ui,
-                                    &self.art,
-                                    "Settings",
-                                    Vec2::new(142.0, if compact { 40.0 } else { 48.0 }),
-                                    true,
-                                    theme::ButtonSkin::Tab { selected: rendered_settings },
-                                );
-                                self.record_focus(FocusTarget::SettingsTab, &settings);
-                                self.art.icon(
-                                    ui.painter(),
-                                    1,
-                                    egui::Rect::from_center_size(
-                                        egui::pos2(settings.rect.left() + 23.0, settings.rect.center().y),
-                                        Vec2::new(21.0, 24.0),
-                                    ),
-                                );
-                                if settings.clicked() {
-                                    self.settings_page = true;
-                                    self.host_page = false;
-                                }
-                            });
-                            ui.add_space(if compact { 1.0 } else { 5.0 });
-                            if rendered_settings {
-                                self.settings_ui(ui);
-                            } else if rendered_host {
-                                self.host_page_ui(ui);
-                            } else {
-                                self.home(ui);
-                            }
-                            ui.add_space(if compact { 2.0 } else { 8.0 });
-                            theme::plank(ui, &self.art, &self.message, if compact { 44.0 } else { 48.0 });
-                            if self.directx_missing {
-                                ui.hyperlink_to(
-                                    "Get the DirectX End-User Runtime from Microsoft",
-                                    osfr_launcher::DIRECTX_RUNTIME_URL,
-                                );
-                            }
-                        });
-                    ui.painter().set(
-                        panel_slot,
-                        theme::panel_shape(&self.art, panel.response.rect),
-                    );
-                    let actual: Vec<_> = self.focus_targets.iter().map(|(target, _)| *target).collect();
-                    debug_assert!(rendered_host || focus_sequence_matches(
-                        &actual,
-                        rendered_settings,
-                        rendered_realms,
-                        self.patch_active(),
-                        self.join_public_key.is_some(),
-                    ));
-                    if !compact {
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new("A non-commercial fan revival | not affiliated with Daybreak or Sony.")
-                                .size(12.0)
-                                .color(Color32::from_rgb(225, 236, 244)),
-                        );
-                    }
-                });
-            });
+        self.redesigned_ui(ctx);
         if let Some(path) = &self.screenshot {
             let capture_delay = if self.test_vine_growth.is_some() {
                 600

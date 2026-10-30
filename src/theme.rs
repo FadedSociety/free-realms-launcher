@@ -18,6 +18,19 @@ pub fn display(size: f32) -> FontId {
     FontId::new(size, egui::FontFamily::Name("Lilita One".into()))
 }
 
+/// Redesign v0.3.1 art pieces drawn by [`UiArt::piece`].
+#[derive(Clone, Copy, Debug)]
+pub enum Piece {
+    TopBar,
+    HeroFrame,
+    Card,
+    Field,
+    ModeCard,
+    ModeCardOn,
+    Teal,
+    ThumbRing,
+}
+
 #[derive(Clone, Copy)]
 pub enum ButtonSkin {
     Standard,
@@ -42,8 +55,12 @@ pub struct UiArt {
     list_row: egui::TextureHandle,
     text_field: egui::TextureHandle,
     pips: [egui::TextureHandle; 4],
-    plank: egui::TextureHandle,
     hero: egui::TextureHandle,
+    top_bar: egui::TextureHandle,
+    hero_frame: egui::TextureHandle,
+    mode_card: [egui::TextureHandle; 2],
+    teal: egui::TextureHandle,
+    thumb_ring: egui::TextureHandle,
     icons: [egui::TextureHandle; 3],
     vines: Vec<GrowingVine>,
 }
@@ -105,8 +122,12 @@ impl UiArt {
                 texture!("pip_error.png"),
                 texture!("pip_disabled.png"),
             ],
-            plank: texture!("plank.png"),
             hero: texture!("hero_cast.png"),
+            top_bar: texture!("top_bar.png"),
+            hero_frame: texture!("hero_frame.png"),
+            mode_card: [texture!("mode_card.png"), texture!("mode_card_on.png")],
+            teal: texture!("teal_button.png"),
+            thumb_ring: texture!("thumb_ring.png"),
             icons: [
                 texture!("icon_leaf_green.png"),
                 texture!("icon_leaf_blue.png"),
@@ -147,6 +168,24 @@ impl UiArt {
         if let Some(texture) = self.icons.get(index) {
             painter.image(texture.id(), rect, unit_uv(), Color32::WHITE);
         }
+    }
+
+    /// Redesign v0.3.1: draw one piece of the new art (9-slice unless it is a fixed ring).
+    pub fn piece(&self, painter: &egui::Painter, piece: Piece, rect: egui::Rect) {
+        let (texture, cx, cy) = match piece {
+            Piece::TopBar => (&self.top_bar, 60.0, 58.0),
+            Piece::HeroFrame => (&self.hero_frame, 170.0, 170.0),
+            Piece::Card => (&self.list_row, 56.0, 56.0),
+            Piece::Field => (&self.text_field, 44.0, 44.0),
+            Piece::ModeCard => (&self.mode_card[0], 56.0, 56.0),
+            Piece::ModeCardOn => (&self.mode_card[1], 60.0, 60.0),
+            Piece::Teal => (&self.teal, 48.0, 46.0),
+            Piece::ThumbRing => {
+                painter.image(self.thumb_ring.id(), rect, unit_uv(), Color32::WHITE);
+                return;
+            }
+        };
+        painter.add(nine_slice(texture, rect, cx, cy, None));
     }
 
     /// The cast that stands over the play dock (redesign 2026-10-30).
@@ -538,77 +577,6 @@ pub fn button(
     response
 }
 
-pub fn row_button(
-    ui: &mut egui::Ui,
-    art: &UiArt,
-    name: &str,
-    address: &str,
-    size: Vec2,
-) -> egui::Response {
-    let painter = ui.painter().clone();
-    let slot = painter.add(egui::Shape::Noop);
-    let accessible = format!("{name}, {address}, status pending");
-    let response = ui
-        .allocate_ui_with_layout(
-            size,
-            egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-            |ui| {
-                ui.add(
-                    egui::Button::new(RichText::new(accessible).color(Color32::TRANSPARENT))
-                        .frame(false)
-                        .min_size(size),
-                )
-            },
-        )
-        .inner;
-    let mut shapes = vec![nine_slice(
-        &art.list_row,
-        response.rect.shrink(1.0),
-        56.0,
-        56.0,
-        None,
-    )];
-    if response.has_focus() {
-        shapes.extend(focus_shapes(response.rect));
-    }
-    painter.set(slot, egui::Shape::Vec(shapes));
-    let rect = response.rect;
-    art.pip(
-        &painter,
-        1,
-        egui::Rect::from_center_size(
-            egui::pos2(rect.left() + 28.0, rect.center().y),
-            Vec2::splat(24.0),
-        ),
-    );
-    let copy = painter.with_clip_rect(egui::Rect::from_min_max(
-        egui::pos2(rect.left() + 50.0, rect.top()),
-        egui::pos2(rect.right() - 122.0, rect.bottom()),
-    ));
-    copy.text(
-        egui::pos2(rect.left() + 50.0, rect.top() + 7.0),
-        egui::Align2::LEFT_TOP,
-        name,
-        display(19.0),
-        DARK_INK,
-    );
-    copy.text(
-        egui::pos2(rect.left() + 50.0, rect.top() + 31.0),
-        egui::Align2::LEFT_TOP,
-        address,
-        FontId::monospace(14.0),
-        DARK_INK,
-    );
-    painter.text(
-        egui::pos2(rect.right() - 16.0, rect.center().y),
-        egui::Align2::RIGHT_CENTER,
-        "Status pending",
-        FontId::proportional(12.0),
-        DARK_INK,
-    );
-    response
-}
-
 pub fn text_field(
     ui: &mut egui::Ui,
     art: &UiArt,
@@ -692,38 +660,8 @@ fn text_field_impl(
     response
 }
 
-pub fn panel() -> egui::Frame {
-    egui::Frame::new()
-        .fill(Color32::TRANSPARENT)
-        .stroke(Stroke::NONE)
-        .corner_radius(0)
-        .inner_margin(18)
-}
-
 pub fn panel_shape(art: &UiArt, rect: egui::Rect) -> egui::Shape {
     nine_slice(&art.panel, rect, 70.0, 70.0, None)
-}
-
-pub fn plank(ui: &mut egui::Ui, art: &UiArt, text: &str, height: f32) {
-    let size = Vec2::new(ui.available_width(), height.max(44.0));
-    let painter = ui.painter().clone();
-    let slot = painter.add(egui::Shape::Noop);
-    let inner = ui.allocate_ui_with_layout(
-        size,
-        egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-        |ui| {
-            ui.add(
-                egui::Label::new(
-                    RichText::new(text)
-                        .color(Color32::from_rgb(255, 242, 208))
-                        .size(14.0),
-                )
-                .wrap(),
-            )
-        },
-    );
-    let rect = inner.response.rect;
-    painter.set(slot, nine_slice(&art.plank, rect, 52.0, 50.0, None));
 }
 
 pub fn install(ctx: &egui::Context) {
