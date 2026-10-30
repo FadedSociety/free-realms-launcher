@@ -70,9 +70,14 @@ impl Launcher {
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         let (rect, _) =
-            ui.allocate_exact_size(Vec2::new(ui.available_width(), 80.0), egui::Sense::hover());
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 96.0), egui::Sense::hover());
         self.art.piece(ui.painter(), Piece::TopBar, rect);
-        let inner = rect.shrink2(Vec2::new(26.0, 6.0));
+        // top_bar.png's channel runs from below its upper rail (47 px down) to above its lip (18 px up):
+        // 23.5 and 9 points at the 0.5 art scale. Logo and tabs centre in it.
+        let inner = egui::Rect::from_min_max(
+            rect.min + Vec2::new(26.0, 23.5),
+            rect.max - Vec2::new(26.0, 9.0),
+        );
         ui.scope_builder(
             egui::UiBuilder::new()
                 .max_rect(inner)
@@ -80,7 +85,7 @@ impl Launcher {
             |ui| {
                 let [w, h] = self.banner.size();
                 let (logo, _) = ui.allocate_exact_size(
-                    Vec2::new(48.0 * w as f32 / h as f32, 48.0),
+                    Vec2::new(52.0 * w as f32 / h as f32, 52.0),
                     egui::Sense::hover(),
                 );
                 ui.painter()
@@ -99,7 +104,7 @@ impl Launcher {
                         ui,
                         &self.art,
                         label,
-                        Vec2::new(if page == 2 { 150.0 } else { 124.0 }, 56.0),
+                        Vec2::new(if page == 2 { 150.0 } else { 124.0 }, 52.0),
                         enabled,
                         theme::ButtonSkin::Tab {
                             selected: current == page,
