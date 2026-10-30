@@ -461,6 +461,8 @@ mod tests {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewsItem {
     pub title: String,
+    /// One line from the release notes for the news card.
+    pub headline: String,
     pub date: String,
     pub url: String,
 }
@@ -470,8 +472,13 @@ pub struct NewsItem {
 pub fn fetch_news(limit: usize) -> Result<Vec<NewsItem>> {
     let cancel = AtomicBool::new(false);
     let mut items = Vec::new();
-    for (repo, label) in [(REPO, "Server"), ("FadedSociety/free-realms-launcher", "Launcher")] {
-        let url = Url::release(&format!("https://api.github.com/repos/{repo}/releases/latest"))?;
+    for (repo, label) in [
+        (REPO, "Server"),
+        ("FadedSociety/free-realms-launcher", "Launcher"),
+    ] {
+        let url = Url::release(&format!(
+            "https://api.github.com/repos/{repo}/releases/latest"
+        ))?;
         let body = fetch_bytes(&url, 1 << 20, &cancel)?;
         items.extend(news_items(&body, label)?);
     }
@@ -493,20 +500,67 @@ fn news_items(body: &[u8], label: &str) -> Result<Vec<NewsItem>> {
         .filter(|r| r.get("draft").and_then(|v| v.as_bool()) != Some(true))
         .map(|r| {
             let text = |k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or("").to_owned();
-            let name = if text("name").is_empty() { text("tag_name") } else { text("name") };
+            let name = if text("name").is_empty() {
+                text("tag_name")
+            } else {
+                text("name")
+            };
             let url = text("html_url");
             NewsItem {
                 title: format!("{label} {name}"),
+                headline: headline(&text("body")),
                 date: text("published_at").chars().take(10).collect(),
-                url: if url.starts_with("https://github.com/") { url } else { String::new() },
+                url: if url.starts_with("https://github.com/") {
+                    url
+                } else {
+                    String::new()
+                },
             }
         })
         .collect())
 }
 
+/// The first `## ` heading of release notes, else their first sentence, without markdown marks.
+fn headline(body: &str) -> String {
+    let line = match body.lines().find_map(|l| l.strip_prefix("## ")) {
+        Some(heading) => heading.trim_start_matches("New: ").to_owned(),
+        None => {
+            let text = body.replace("**", "").replace("Early preview.", "");
+            let text = text.trim();
+            text.split(". ")
+                .next()
+                .unwrap_or(text)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim_end_matches('.')
+                .to_owned()
+        }
+    };
+    let line = line.replace('`', "");
+    let mut chars = line.trim().chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod news_tests {
     use super::*;
+
+    #[test]
+    fn headline_takes_the_first_heading_else_the_first_sentence() {
+        assert_eq!(
+            headline("Early preview. Install it.\n\n## New: host on the internet\n\nText."),
+            "Host on the internet"
+        );
+        assert_eq!(
+            headline("**Early preview.** A redesigned launcher: art. More here."),
+            "A redesigned launcher: art"
+        );
+        assert_eq!(headline(""), "");
+    }
 
     #[test]
     #[ignore = "live GitHub request"]
@@ -526,7 +580,10 @@ mod news_tests {
         assert_eq!(items.len(), 2, "drafts are not news");
         assert_eq!(items[0].title, "Launcher v0.2.3 (early preview)");
         assert_eq!(items[0].date, "2026-10-30");
-        assert_eq!(items[1].title, "Launcher v9", "the tag stands in for an empty name");
+        assert_eq!(
+            items[1].title, "Launcher v9",
+            "the tag stands in for an empty name"
+        );
         assert!(items[1].url.is_empty(), "only github.com links are shown");
     }
 }

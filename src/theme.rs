@@ -24,7 +24,6 @@ pub enum Piece {
     TopBar,
     HeroFrame,
     Card,
-    Field,
     ModeCard,
     ModeCardOn,
     Teal,
@@ -176,7 +175,6 @@ impl UiArt {
             Piece::TopBar => (&self.top_bar, 60.0, 58.0),
             Piece::HeroFrame => (&self.hero_frame, 170.0, 170.0),
             Piece::Card => (&self.list_row, 56.0, 56.0),
-            Piece::Field => (&self.text_field, 44.0, 44.0),
             Piece::ModeCard => (&self.mode_card[0], 56.0, 56.0),
             Piece::ModeCardOn => (&self.mode_card[1], 60.0, 60.0),
             Piece::Teal => (&self.teal, 48.0, 46.0),
@@ -530,9 +528,13 @@ pub fn button(
                 ui.visuals_mut().disabled_alpha = 1.0;
                 ui.add_enabled(
                     enabled,
-                    egui::Button::new(RichText::new(text).font(font.clone()).color(Color32::WHITE))
-                        .frame(false)
-                        .min_size(size),
+                    egui::Button::new(
+                        RichText::new(text)
+                            .font(font.clone())
+                            .color(Color32::TRANSPARENT),
+                    )
+                    .frame(false)
+                    .min_size(size),
                 )
             },
         )
@@ -554,8 +556,15 @@ pub fn button(
     if response.has_focus() {
         shapes.extend(focus_shapes(response.rect));
     }
+    // The selected tab's leaf sits above its body, so its caption drops onto the body (tab_selected.png).
+    let lift = match skin {
+        ButtonSkin::Tab { selected: true } => Vec2::new(-2.0, 6.0),
+        _ => Vec2::ZERO,
+    };
+    let at = response.rect.center() + lift;
     // A dark outline keeps the white caption clear on both bright and shaded green pixels.
     let outline_color = Color32::from_rgb(7, 18, 15);
+    let caption = painter.layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE);
     let outline = painter.layout_no_wrap(text.to_owned(), font, outline_color);
     for offset in [
         Vec2::new(-1.2, -1.2),
@@ -568,11 +577,16 @@ pub fn button(
         Vec2::new(1.2, 1.2),
     ] {
         shapes.push(egui::Shape::galley(
-            response.rect.center() - outline.size() / 2.0 + offset,
+            at - outline.size() / 2.0 + offset,
             outline.clone(),
             outline_color,
         ));
     }
+    shapes.push(egui::Shape::galley(
+        at - caption.size() / 2.0,
+        caption,
+        Color32::WHITE,
+    ));
     painter.set(slot, egui::Shape::Vec(shapes));
     response
 }
@@ -664,8 +678,38 @@ pub fn panel_shape(art: &UiArt, rect: egui::Rect) -> egui::Shape {
     nine_slice(&art.panel, rect, 70.0, 70.0, None)
 }
 
-pub fn install(ctx: &egui::Context) {
+/// The client's `UI/Resource/Fonts/FreeRealms.ttf`, the game's own UI font, when the player's copy has
+/// the original file (size and SHA-256 pinned, so a damaged or swapped file is never parsed).
+pub fn game_font(client: &std::path::Path) -> Option<Vec<u8>> {
+    const SIZE: u64 = 44_344;
+    const SHA256: &str = "3fd6fc16574286fd6f95b133d40e6cc8f5c108c3b16570fa1a2ea22c71f8d97c";
+    let path = client
+        .join("UI")
+        .join("Resource")
+        .join("Fonts")
+        .join("FreeRealms.ttf");
+    if std::fs::metadata(&path).ok()?.len() != SIZE {
+        return None;
+    }
+    let bytes = std::fs::read(path).ok()?;
+    let hash = osfr_launcher::patch::sha256(&bytes).ok()?;
+    hash.eq_ignore_ascii_case(SHA256).then_some(bytes)
+}
+
+/// Lilita One for display text; body text in the game's font when the client has it, else egui's default.
+pub fn set_fonts(ctx: &egui::Context, game_font: Option<Vec<u8>>) {
     let mut fonts = egui::FontDefinitions::default();
+    if let Some(bytes) = game_font {
+        fonts.font_data.insert(
+            "FreeRealms".into(),
+            egui::FontData::from_owned(bytes).into(),
+        );
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "FreeRealms".into());
+    }
     fonts.font_data.insert(
         "Lilita One".into(),
         egui::FontData::from_static(include_bytes!("../assets/fonts/LilitaOne-Regular.ttf")).into(),
@@ -675,6 +719,10 @@ pub fn install(ctx: &egui::Context) {
         vec!["Lilita One".into(), "Ubuntu-Light".into()],
     );
     ctx.set_fonts(fonts);
+}
+
+pub fn install(ctx: &egui::Context) {
+    set_fonts(ctx, None);
     let mut style = (*ctx.style()).clone();
     style.visuals = egui::Visuals::dark();
     style.visuals.override_text_color = Some(INK);
@@ -797,9 +845,15 @@ mod tests {
             _ => panic!("nine_slice draws a mesh"),
         };
         let big = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(400.0, 200.0));
-        assert!((corner_width(big) - 20.0).abs() < 0.01, "half of the 40 px source corner");
+        assert!(
+            (corner_width(big) - 20.0).abs() < 0.01,
+            "half of the 40 px source corner"
+        );
         let small = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(400.0, 20.0));
-        assert!((corner_width(small) - 10.0).abs() < 0.01, "both axes scale by the same factor");
+        assert!(
+            (corner_width(small) - 10.0).abs() < 0.01,
+            "both axes scale by the same factor"
+        );
     }
 
     #[test]

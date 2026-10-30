@@ -559,6 +559,9 @@ pub(crate) struct Launcher {
     host_page: bool,
     /// v0.3.1: the realm chooser over the hero scene (Change).
     realm_popup: bool,
+    /// The client folder the fonts were last chosen for, and whether the game's font is in use.
+    font_client: String,
+    game_font: bool,
     /// Redesign 2026-10-30: release news for the Play tab, fetched once in the background.
     news: Vec<osfr_launcher::release::NewsItem>,
     news_rx: Option<mpsc::Receiver<Vec<osfr_launcher::release::NewsItem>>>,
@@ -642,6 +645,8 @@ impl Launcher {
             settings_page,
             host_page: false,
             realm_popup: false,
+            font_client: String::new(),
+            game_font: false,
             news: Vec::new(),
             news_rx: {
                 let (tx, rx) = mpsc::channel();
@@ -1562,6 +1567,14 @@ impl eframe::App for Launcher {
                 ctx.set_zoom_factor(zoom);
             }
         }
+        if self.font_client != self.client {
+            self.font_client.clone_from(&self.client);
+            let font = theme::game_font(Path::new(self.client.trim()));
+            if font.is_some() != self.game_font {
+                self.game_font = font.is_some();
+                theme::set_fonts(ctx, font);
+            }
+        }
         if let Some(Ok(items)) = self.news_rx.as_ref().map(|rx| rx.try_recv()) {
             self.news = items;
             self.news_rx = None;
@@ -1708,6 +1721,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     diagnostics::init()?;
     let mut screenshot = None;
     let mut settings_page = false;
+    let mut host_page = false;
+    let mut client = None;
     let mut focus_play = false;
     let mut test_vine_growth = None;
     let mut patch_preview = false;
@@ -1722,6 +1737,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         } else if arg == "--settings-page" {
             settings_page = true;
+        } else if arg == "--host-page" {
+            host_page = true;
+        } else if arg == "--client" {
+            client = Some(args.next().ok_or("--client requires the client folder.")?);
         } else if arg == "--test-focus-play" {
             focus_play = true;
         } else if arg == "--test-vine-growth-ms" {
@@ -1754,7 +1773,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             window_size = [settings.width as f32, settings.height as f32];
         } else {
             return Err(
-                "Usage: osfr-launcher [--settings-page] [--window-size WIDTHxHEIGHT] [--screenshot existing-folder/output.png]"
+                "Usage: osfr-launcher [--settings-page | --host-page] [--client FOLDER] [--window-size WIDTHxHEIGHT] [--screenshot existing-folder/output.png]"
                     .into(),
             );
         }
@@ -1804,6 +1823,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .map_err(std::io::Error::other)?;
             launcher.patch_preview = patch_preview;
+            launcher.host_page = host_page;
+            if let Some(folder) = &client {
+                launcher.client = folder.to_string_lossy().into_owned();
+            }
             launcher.check_server_on_start();
             if join_preview {
                 launcher.load_join_preview();
