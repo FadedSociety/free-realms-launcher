@@ -60,6 +60,7 @@ pub struct UiArt {
     mode_card: [egui::TextureHandle; 2],
     teal: egui::TextureHandle,
     thumb_ring: egui::TextureHandle,
+    github_mark: egui::TextureHandle,
     icons: [egui::TextureHandle; 3],
     vines: Vec<GrowingVine>,
 }
@@ -127,6 +128,7 @@ impl UiArt {
             mode_card: [texture!("mode_card.png"), texture!("mode_card_on.png")],
             teal: texture!("teal_button.png"),
             thumb_ring: texture!("thumb_ring.png"),
+            github_mark: texture!("github_mark.png"),
             icons: [
                 texture!("icon_leaf_green.png"),
                 texture!("icon_leaf_blue.png"),
@@ -184,6 +186,11 @@ impl UiArt {
             }
         };
         painter.add(nine_slice(texture, rect, cx, cy, None));
+    }
+
+    /// GitHub's mark (Primer Octicons, MIT), white on clear for tinting.
+    pub fn github_mark(&self) -> &egui::TextureHandle {
+        &self.github_mark
     }
 
     /// The cast that stands over the play dock (redesign 2026-10-30).

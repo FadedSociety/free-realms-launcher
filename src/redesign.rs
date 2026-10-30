@@ -203,11 +203,15 @@ impl Launcher {
                     }
                     ui.add_space(6.0);
                 }
-                // A bubble pinned to the bottom of the panel opens the launcher's GitHub page.
+                // A bubble sized to its contents, pinned to the bottom of the panel: the launcher's GitHub page.
+                let label = ui
+                    .painter()
+                    .layout_no_wrap("GitHub".into(), theme::display(17.0), INK);
+                let size = Vec2::new(14.0 + 20.0 + 8.0 + label.size().x + 16.0, 36.0);
                 let area = ui.max_rect();
-                let pill = egui::Rect::from_min_max(
-                    egui::pos2(area.left(), area.bottom() - 44.0),
-                    area.right_bottom(),
+                let pill = egui::Rect::from_min_size(
+                    egui::pos2(area.center().x - size.x / 2.0, area.bottom() - size.y),
+                    size,
                 );
                 let link = ui.interact(pill, ui.id().with("github-updates"), egui::Sense::click());
                 let stroke = if link.hovered() || link.has_focus() {
@@ -215,18 +219,26 @@ impl Launcher {
                 } else {
                     2.0_f32
                 };
-                ui.painter().rect(
+                let painter = ui.painter();
+                painter.rect(
                     pill,
-                    22.0,
+                    size.y / 2.0,
                     Color32::WHITE,
                     egui::Stroke::new(stroke, TEAL_INK),
                     egui::StrokeKind::Inside,
                 );
-                ui.painter().text(
-                    pill.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "GitHub updates",
-                    theme::display(17.0),
+                painter.image(
+                    self.art.github_mark().id(),
+                    egui::Rect::from_center_size(
+                        egui::pos2(pill.left() + 24.0, pill.center().y),
+                        Vec2::splat(20.0),
+                    ),
+                    theme::unit_uv(),
+                    INK,
+                );
+                painter.galley(
+                    egui::pos2(pill.left() + 42.0, pill.center().y - label.size().y / 2.0),
+                    label,
                     INK,
                 );
                 if link.clicked() {
@@ -234,7 +246,8 @@ impl Launcher {
                         "https://github.com/FadedSociety/free-realms-launcher",
                     ));
                 }
-                link.on_hover_cursor(egui::CursorIcon::PointingHand);
+                link.on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text("Take me to the GitHub page");
                 if self.patch_active() {
                     self.patch_progress_ui(ui);
                 }
