@@ -12,15 +12,17 @@ hashes and slice boxes are listed in `assets/ui/README.md`; review captures and
 the readability audit are in `lab/reports/rust-launcher-w98/`.
 
 To join a friend's realm, open **Settings → Join a realm** and enter the game
-address, the 64-digit server identity supplied by the host, and your account
-handle. Check the short fingerprint against the host, then choose **Create my
-key**. The launcher stores the private key and trusted profile in your Windows
-user profile, adds the realm to the list, and shows the public key. Copy that
-public key and send it to the host for enrollment. It is safe to share; never
-send a private key. Return to **Realms** and choose the saved account beside
-PLAY.
+address. Paste the 64-digit server identity the host sends, or press **Ask the
+realm for its identity**, then check the short fingerprint against the one the
+host sees. Pick an account handle and choose **Create my key**. The launcher
+stores the private key and trusted profile in your Windows user profile, adds
+the realm to the list, and shows the public key. A realm hosted with **Host for
+friends** makes your account on your first PLAY; otherwise send that public key
+to the host for enrollment. It is safe to share; never send a private key.
+Return to **Realms** and choose the saved account beside PLAY.
 
-The trusted server identity comes from the host, never from a network response.
+The trusted server identity is the one you saved: pasted from the host, or
+fetched once and checked by its fingerprint. Login refuses any other identity.
 Login goes to the realm's AUTH2 broker: by default the game address's IP at port
 20043, and only a loopback or private/VPN address (`default_broker` in
 `src/main.rs`, `broker_ip_allowed` in `src/auth.rs`). The host must enroll the
@@ -84,6 +86,17 @@ console windows, makes this PC's key-pair profile for the local realm the first 
 with `osfr-account`), then launches your client against it. The servers stop when the client closes; your saves
 stay in `server/state`. Logs are in the local profile's `realm/logs` folder under
 `%APPDATA%\FreeRealmsExpanded\profiles`.
+
+### Host for friends
+
+Tick **Host for friends (LAN or VPN)** before **Play locally** to run the realm on this PC's LAN address, or
+its Tailscale (100.64.0.0/10) address when one is up, on ports 20041 (game, UDP), 20042 (login, UDP) and 20043
+(key-pair login, TCP). Windows asks once to let osfr-gateway and osfr-login through its firewall: allow private
+networks. While hosting, the launcher shows the address and the server fingerprint, and **Copy join details**
+copies both for your friends. The realm is open: a friend's first login makes their player account, at most
+three new accounts an hour from one address and 64 in all. To let only certain players in, list their handles,
+one per line, in `server/state/whitelist.txt`. Your own account is the realm's admin. Public internet addresses
+are refused; friends outside your network join through a VPN such as Tailscale.
 
 ### What the release contains
 
