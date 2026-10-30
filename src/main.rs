@@ -554,6 +554,8 @@ pub(crate) struct Launcher {
     host: bool,
     host_choices: Vec<std::net::IpAddr>,
     host_address: Option<std::net::IpAddr>,
+    /// L070: the last PLAY stopped on a missing DirectX runtime; the installer link shows.
+    directx_missing: bool,
 }
 
 impl Launcher {
@@ -622,6 +624,7 @@ impl Launcher {
             host: false,
             host_choices: Vec::new(),
             host_address: None,
+            directx_missing: false,
         })
     }
 
@@ -640,6 +643,9 @@ impl Launcher {
             return;
         }
         let client = PathBuf::from(&self.client);
+        if self.needs_directx(&client) {
+            return;
+        }
         let locale = (!self.locale.trim().is_empty()).then(|| PathBuf::from(&self.locale));
         let server = &self.servers[self.selected];
         let address = server.address.clone();
@@ -706,6 +712,9 @@ impl Launcher {
             return;
         }
         let client = PathBuf::from(&self.client);
+        if self.needs_directx(&client) {
+            return;
+        }
         let locale = (!self.locale.trim().is_empty()).then(|| PathBuf::from(&self.locale));
         let settings = self.settings;
         let (sender, receiver) = mpsc::channel();
@@ -714,6 +723,16 @@ impl Launcher {
         std::thread::spawn(move || {
             let _ = sender.send(start_local(&local, &client, locale.as_deref(), settings));
         });
+    }
+
+    /// L070: stop before launch when the client's DirectX DLL is missing, and offer Microsoft's
+    /// installer instead of a client that fails on start.
+    fn needs_directx(&mut self, client: &Path) -> bool {
+        self.directx_missing = osfr_launcher::directx_missing(client);
+        if self.directx_missing {
+            self.message = "Free Realms needs Microsoft's DirectX End-User Runtime (d3dx9_31.dll is missing). Install it, then press PLAY again.".into();
+        }
+        self.directx_missing
     }
 
     /// Install or update the local server from the latest GitHub release, off the UI thread.
@@ -1710,6 +1729,12 @@ impl eframe::App for Launcher {
                             }
                             ui.add_space(if compact { 2.0 } else { 8.0 });
                             theme::plank(ui, &self.art, &self.message, if compact { 44.0 } else { 48.0 });
+                            if self.directx_missing {
+                                ui.hyperlink_to(
+                                    "Get the DirectX End-User Runtime from Microsoft",
+                                    osfr_launcher::DIRECTX_RUNTIME_URL,
+                                );
+                            }
                         });
                     ui.painter().set(
                         panel_slot,

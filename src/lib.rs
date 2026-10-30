@@ -47,6 +47,26 @@ use std::{
 
 pub type Result<T> = std::result::Result<T, String>;
 const LOCALE: [&str; 2] = ["en_us_data.dat", "en_us_data.dir"];
+/// L070: Microsoft's DirectX End-User Runtime, which installs the legacy D3DX9 DLLs the client loads.
+/// The launcher links to it and never ships the DLL.
+pub const DIRECTX_RUNTIME_URL: &str = "https://www.microsoft.com/en-us/download/details.aspx?id=35";
+
+/// L070: FreeRealms.exe (32-bit) needs `d3dx9_31.dll` from the legacy DirectX runtime, which a clean
+/// Windows install lacks (the owner's second PC, 2026-10-29). It loads from the client folder or the
+/// 32-bit system folder (SysWOW64 on 64-bit Windows).
+pub fn directx_missing(client: &Path) -> bool {
+    let windows =
+        std::env::var_os("WINDIR").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+    let wow64 = windows.join("SysWOW64");
+    let system = if wow64.is_dir() {
+        wow64
+    } else {
+        windows.join("System32")
+    };
+    ![client, system.as_path()]
+        .iter()
+        .any(|dir| dir.join("d3dx9_31.dll").is_file())
+}
 const CONFIG_LIMIT: u64 = 1024 * 1024;
 const LOCALE_LIMIT: u64 = 64 * 1024 * 1024;
 

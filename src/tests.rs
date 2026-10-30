@@ -1,5 +1,6 @@
 use super::{
-    LaunchPlan, LaunchSettings, LocalLoginStub, LoginProvider, SessionToken, validate_endpoint,
+    LaunchPlan, LaunchSettings, LocalLoginStub, LoginProvider, SessionToken, directx_missing,
+    validate_endpoint,
 };
 use std::{
     fs,
@@ -570,4 +571,15 @@ fn creator_overlay_pins_are_complete_relative_client_paths() {
     for table in tables {
         assert!(crate::local::CREATOR_OVERLAY.iter().any(|(path, _)| path.ends_with(table)), "{table}");
     }
+}
+
+/// L070: a d3dx9_31.dll in the client folder satisfies the DirectX check (the system folders are
+/// this PC's own and are not assumed either way).
+#[test]
+fn a_directx_dll_beside_the_client_satisfies_the_check() {
+    let dir = std::env::temp_dir().join(format!("osfr-directx-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("d3dx9_31.dll"), b"MZ").unwrap();
+    assert!(!directx_missing(&dir));
+    let _ = fs::remove_dir_all(dir);
 }
