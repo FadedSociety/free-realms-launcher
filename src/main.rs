@@ -227,6 +227,14 @@ fn launcher_folder() -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
+/// The stock character select lists ids, not names; a client without the known movie is skipped
+/// and a failure never stops play.
+fn character_select_names(client: &Path) {
+    if let Err(error) = osfr_launcher::character_select::ensure_names(client) {
+        log::warn!("character select names: {error}");
+    }
+}
+
 /// T771: start the local servers, make and enroll this PC's local profile once (a marker file
 /// records the enrollment, so a failed one is retried), then prepare and launch the client
 /// against the local login port. The returned realm must live as long as the client.
@@ -241,6 +249,7 @@ fn start_local(
         .join("realm");
     // The stock creator tables fail osfr-login's pin; the overlay goes into the client copy first.
     osfr_launcher::local::ensure_creator_overlay(client).map_err(|e| e.to_string())?;
+    character_select_names(client);
     // Enroll before the servers start: in account-store mode osfr-login refuses a missing store
     // and never creates one from network input. The profile keeps only the fixed local broker.
     let broker = format!("127.0.0.1:{}", osfr_launcher::local::BROKER_PORT);
@@ -671,6 +680,7 @@ impl Launcher {
         self.message = "Preparing client files and backups...".into();
         // One bounded preparation job; keep the window responsive during locale I/O.
         std::thread::spawn(move || {
+            character_select_names(&client);
             let mut login: Box<dyn LoginProvider + Send> = Box::new(RealmLogin {
                 profile_id,
                 broker: None,

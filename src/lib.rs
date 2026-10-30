@@ -2,6 +2,7 @@
 
 pub mod assets;
 pub mod auth;
+pub mod character_select;
 pub mod local;
 pub mod patch;
 pub mod release;

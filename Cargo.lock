@@ -2106,7 +2106,7 @@ dependencies = [
 
 [[package]]
 name = "osfr-launcher"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ed25519-dalek",
  "eframe",
@@ -2114,6 +2114,7 @@ dependencies = [
  "gilrs",
  "image",
  "log",
+ "miniz_oxide 0.8.9",
  "serde",
  "serde_json",
  "subtle",

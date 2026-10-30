@@ -397,6 +397,16 @@ Customization tables: `Resources/` (0x017ed7d8, passed by 0x008ec05d to
 an ordinary folder the client's loose-file index scans (notes/Research/Native
 Character Selection Labels.md).
 
+## Names in character select
+
+The stock character select movie (`characterSelectV2.gfx`, Assets_006.pack entry
+6072) titles each row with the character's id, so players see "1" and "0" instead
+of their name and "Add a Character". Before each launch the launcher reads that
+movie from the player's own client, checks its SHA-256, changes the one title
+operand from `_id` to `_name` and writes the result to `custom/characterSelectV2.gfx`
+(`src/character_select.rs`). No client file is shipped; an existing file there, or
+a different client's movie, is left alone.
+
 ## Licence
 
 GNU Affero General Public License v3 or later (`LICENSE`), like the Free Realms Expanded server, since 2026-10-29
