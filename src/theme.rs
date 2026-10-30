@@ -546,22 +546,20 @@ pub fn button(
         response.hovered(),
         response.is_pointer_button_down_on(),
     );
-    let mut shapes = vec![nine_slice(
-        texture,
-        response.rect.shrink(1.0),
-        cx,
-        cy,
-        bead_period,
-    )];
+    // The selected tab's image has a leaf above a shorter body: grow its box so the green body covers the
+    // plank's footprint, `rect.shrink(2)` (margins measured on both tab images at the 0.5 art scale).
+    let art_rect = match skin {
+        ButtonSkin::Tab { selected: true } => egui::Rect::from_min_max(
+            response.rect.min - Vec2::new(0.0, 11.5),
+            response.rect.max + Vec2::new(7.0, -1.0),
+        ),
+        _ => response.rect.shrink(1.0),
+    };
+    let mut shapes = vec![nine_slice(texture, art_rect, cx, cy, bead_period)];
     if response.has_focus() {
         shapes.extend(focus_shapes(response.rect));
     }
-    // The selected tab's leaf sits above its body, so its caption drops onto the body (tab_selected.png).
-    let lift = match skin {
-        ButtonSkin::Tab { selected: true } => Vec2::new(-2.0, 6.0),
-        _ => Vec2::ZERO,
-    };
-    let at = response.rect.center() + lift;
+    let at = response.rect.center();
     // A dark outline keeps the white caption clear on both bright and shaded green pixels.
     let outline_color = Color32::from_rgb(7, 18, 15);
     let caption = painter.layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE);

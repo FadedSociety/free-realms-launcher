@@ -10,6 +10,8 @@ const CHIP_H: f32 = 40.0;
 const PLAY_H: f32 = 78.0;
 const NEWS_H: f32 = 32.0;
 const GAP: f32 = 10.0;
+/// Inside a purple panel: its rim ends 26 points in (52 px on panel.png at the 0.5 art scale), plus air.
+const PANEL_PAD: f32 = 36.0;
 /// The play dock: realm chip, PLAY and the latest-news pill.
 const DOCK_H: f32 = CHIP_H + GAP + PLAY_H + GAP + NEWS_H;
 
@@ -52,9 +54,12 @@ impl Launcher {
                 if self.settings_page {
                     let rect = ui.available_rect_before_wrap();
                     ui.painter().add(theme::panel_shape(&self.art, rect));
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink(22.0)), |ui| {
-                        egui::ScrollArea::vertical().show(ui, |ui| self.settings_ui(ui));
-                    });
+                    ui.scope_builder(
+                        egui::UiBuilder::new().max_rect(rect.shrink(PANEL_PAD)),
+                        |ui| {
+                            egui::ScrollArea::vertical().show(ui, |ui| self.settings_ui(ui));
+                        },
+                    );
                 } else if self.host_page {
                     self.host_screen(ui);
                 } else {
@@ -65,7 +70,7 @@ impl Launcher {
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         let (rect, _) =
-            ui.allocate_exact_size(Vec2::new(ui.available_width(), 72.0), egui::Sense::hover());
+            ui.allocate_exact_size(Vec2::new(ui.available_width(), 80.0), egui::Sense::hover());
         self.art.piece(ui.painter(), Piece::TopBar, rect);
         let inner = rect.shrink2(Vec2::new(26.0, 6.0));
         ui.scope_builder(
@@ -137,79 +142,71 @@ impl Launcher {
 
     fn news_panel(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
         ui.painter().add(theme::panel_shape(&self.art, rect));
-        ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink(20.0)), |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("News & updates")
-                        .font(theme::display(21.0))
-                        .color(Color32::WHITE),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        RichText::new("GITHUB")
-                            .size(11.0)
-                            .color(Color32::from_rgb(222, 222, 250)),
-                    );
-                });
-            });
-            ui.add_space(6.0);
-            if self.news.is_empty() {
-                ui.label(
-                    RichText::new("News shows here when you are online.").color(Color32::WHITE),
-                );
-            }
-            for item in self.news.clone() {
-                let (card, response) = ui.allocate_exact_size(
-                    Vec2::new(ui.available_width(), 70.0),
-                    egui::Sense::click(),
-                );
-                self.art.piece(ui.painter(), Piece::Card, card);
-                let ring = egui::Rect::from_center_size(
-                    egui::pos2(card.left() + 36.0, card.center().y),
-                    Vec2::splat(46.0),
-                );
-                self.art.icon(ui.painter(), 2, ring.shrink(9.0));
-                self.art.piece(ui.painter(), Piece::ThumbRing, ring);
-                let text = egui::pos2(card.left() + 68.0, card.top() + 14.0);
-                let clip = ui.painter().with_clip_rect(card.shrink(10.0));
-                let title = item
-                    .title
-                    .split(':')
-                    .next()
-                    .unwrap_or_default()
-                    .replace(" (early preview)", "");
-                let tag = format!("{} \u{b7} {}", title.to_uppercase(), item.date);
-                clip.text(
-                    text,
-                    egui::Align2::LEFT_TOP,
-                    tag,
-                    egui::FontId::proportional(11.5),
-                    Color32::from_rgb(14, 95, 125),
-                );
-                let line = if item.headline.is_empty() {
-                    &title
-                } else {
-                    &item.headline
-                };
-                let mut job = egui::text::LayoutJob::simple_singleline(
-                    line.clone(),
-                    egui::FontId::proportional(15.0),
-                    INK,
-                );
-                job.wrap =
-                    egui::text::TextWrapping::truncate_at_width(card.right() - text.x - 16.0);
-                clip.galley(text + Vec2::new(0.0, 18.0), clip.layout_job(job), INK);
-                if response.clicked() && !item.url.is_empty() {
-                    ui.ctx().open_url(egui::OpenUrl::new_tab(&item.url));
-                }
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(rect.shrink(PANEL_PAD)),
+            |ui| {
+                panel_title(ui, "News & updates");
                 ui.add_space(6.0);
-            }
-            ui.hyperlink_to(
-                RichText::new("All updates on GitHub").color(Color32::WHITE),
-                "https://github.com/FadedSociety/free-realms-expanded/releases",
-            );
-            self.patch_progress_ui(ui);
-        });
+                if self.news.is_empty() {
+                    ui.label(
+                        RichText::new("News shows here when you are online.").color(Color32::WHITE),
+                    );
+                }
+                for item in self.news.clone() {
+                    let (card, response) = ui.allocate_exact_size(
+                        Vec2::new(ui.available_width(), 70.0),
+                        egui::Sense::click(),
+                    );
+                    self.art.piece(ui.painter(), Piece::Card, card);
+                    let ring = egui::Rect::from_center_size(
+                        egui::pos2(card.left() + 36.0, card.center().y),
+                        Vec2::splat(46.0),
+                    );
+                    self.art.icon(ui.painter(), 2, ring.shrink(9.0));
+                    self.art.piece(ui.painter(), Piece::ThumbRing, ring);
+                    let text = egui::pos2(card.left() + 68.0, card.top() + 14.0);
+                    let clip = ui.painter().with_clip_rect(card.shrink(10.0));
+                    let title = item
+                        .title
+                        .split(':')
+                        .next()
+                        .unwrap_or_default()
+                        .replace(" (early preview)", "");
+                    let tag = format!("{} \u{b7} {}", title.to_uppercase(), item.date);
+                    clip.text(
+                        text,
+                        egui::Align2::LEFT_TOP,
+                        tag,
+                        egui::FontId::proportional(11.5),
+                        Color32::from_rgb(14, 95, 125),
+                    );
+                    let line = if item.headline.is_empty() {
+                        &title
+                    } else {
+                        &item.headline
+                    };
+                    let mut job = egui::text::LayoutJob::simple_singleline(
+                        line.clone(),
+                        egui::FontId::proportional(15.0),
+                        INK,
+                    );
+                    job.wrap =
+                        egui::text::TextWrapping::truncate_at_width(card.right() - text.x - 16.0);
+                    clip.galley(text + Vec2::new(0.0, 18.0), clip.layout_job(job), INK);
+                    if response.clicked() && !item.url.is_empty() {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(&item.url));
+                    }
+                    ui.add_space(6.0);
+                }
+                ui.hyperlink_to(
+                    RichText::new("All updates on GitHub").color(Color32::WHITE),
+                    "https://github.com/FadedSociety/free-realms-expanded/releases",
+                );
+                if self.patch_active() {
+                    self.patch_progress_ui(ui);
+                }
+            },
+        );
     }
 
     fn hero_window(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
@@ -413,88 +410,88 @@ impl Launcher {
             .fixed_pos(rect.min)
             .show(ui.ctx(), |ui| {
                 ui.painter().add(theme::panel_shape(&self.art, rect));
-                ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink(18.0)), |ui| {
-                    ui.label(
-                        RichText::new("Choose a realm")
-                            .font(theme::display(19.0))
-                            .color(Color32::WHITE),
-                    );
-                    for index in 0..self.servers.len() {
-                        let text = format!(
-                            "{}  ·  {}",
-                            self.servers[index].name, self.servers[index].address
-                        );
-                        let row = ui.selectable_label(
-                            index == self.selected,
-                            RichText::new(text).color(Color32::WHITE),
-                        );
-                        self.record_focus(FocusTarget::RealmRow(index), &row);
-                        if row.clicked() {
-                            self.selected = index;
-                        }
-                    }
-                    ui.horizontal(|ui| {
-                        let field = theme::text_field(
-                            ui,
-                            &self.art,
-                            &mut self.new_address,
-                            "Add host:port",
-                            Vec2::new(220.0, 40.0),
-                            261,
-                        );
-                        self.record_focus(FocusTarget::AddAddress, &field);
-                        let add = theme::button(
-                            ui,
-                            &self.art,
-                            "Add",
-                            Vec2::new(90.0, 40.0),
-                            self.servers.len() < 16,
-                            theme::ButtonSkin::Standard,
-                        );
-                        self.record_focus(FocusTarget::AddRealm, &add);
-                        if add.clicked() {
-                            match osfr_launcher::validate_endpoint(&self.new_address) {
-                                Ok(()) => {
-                                    self.servers.push(Server {
-                                        name: "Custom realm".into(),
-                                        address: self.new_address.clone(),
-                                        profile_id: String::new(),
-                                        patch: PatchSource::default(),
-                                    });
-                                    self.selected = self.servers.len() - 1;
-                                    self.new_address.clear();
-                                    self.message =
-                                        "Realm added. Select a saved profile or Local login."
-                                            .into();
-                                }
-                                Err(error) => self.message = error,
+                ui.scope_builder(
+                    egui::UiBuilder::new().max_rect(rect.shrink(PANEL_PAD)),
+                    |ui| {
+                        panel_title(ui, "Choose a realm");
+                        for index in 0..self.servers.len() {
+                            let text = format!(
+                                "{}  ·  {}",
+                                self.servers[index].name, self.servers[index].address
+                            );
+                            let row = ui.selectable_label(
+                                index == self.selected,
+                                RichText::new(text).color(Color32::WHITE),
+                            );
+                            self.record_focus(FocusTarget::RealmRow(index), &row);
+                            if row.clicked() {
+                                self.selected = index;
                             }
                         }
-                    });
-                    if let Some(server) = self.servers.get_mut(self.selected) {
-                        let label = profile_label(&server.profile_id, &self.profiles).to_owned();
-                        let profile = egui::ComboBox::from_id_salt("login-profile")
-                            .selected_text(label)
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut server.profile_id,
-                                    String::new(),
-                                    "Local login",
-                                );
-                                for (value, name) in &self.profiles {
+                        ui.horizontal(|ui| {
+                            let field = theme::text_field(
+                                ui,
+                                &self.art,
+                                &mut self.new_address,
+                                "Add host:port",
+                                Vec2::new(220.0, 40.0),
+                                261,
+                            );
+                            self.record_focus(FocusTarget::AddAddress, &field);
+                            let add = theme::button(
+                                ui,
+                                &self.art,
+                                "Add",
+                                Vec2::new(90.0, 40.0),
+                                self.servers.len() < 16,
+                                theme::ButtonSkin::Standard,
+                            );
+                            self.record_focus(FocusTarget::AddRealm, &add);
+                            if add.clicked() {
+                                match osfr_launcher::validate_endpoint(&self.new_address) {
+                                    Ok(()) => {
+                                        self.servers.push(Server {
+                                            name: "Custom realm".into(),
+                                            address: self.new_address.clone(),
+                                            profile_id: String::new(),
+                                            patch: PatchSource::default(),
+                                        });
+                                        self.selected = self.servers.len() - 1;
+                                        self.new_address.clear();
+                                        self.message =
+                                            "Realm added. Select a saved profile or Local login."
+                                                .into();
+                                    }
+                                    Err(error) => self.message = error,
+                                }
+                            }
+                        });
+                        if let Some(server) = self.servers.get_mut(self.selected) {
+                            let label =
+                                profile_label(&server.profile_id, &self.profiles).to_owned();
+                            let profile = egui::ComboBox::from_id_salt("login-profile")
+                                .selected_text(label)
+                                .show_ui(ui, |ui| {
                                     ui.selectable_value(
                                         &mut server.profile_id,
-                                        value.clone(),
-                                        name,
+                                        String::new(),
+                                        "Local login",
                                     );
-                                }
-                            });
-                        self.record_focus(FocusTarget::LoginProfile, &profile.response);
-                    }
-                    if ui.button("Done").clicked() {
-                        self.realm_popup = false;
-                    }
-                });
+                                    for (value, name) in &self.profiles {
+                                        ui.selectable_value(
+                                            &mut server.profile_id,
+                                            value.clone(),
+                                            name,
+                                        );
+                                    }
+                                });
+                            self.record_focus(FocusTarget::LoginProfile, &profile.response);
+                        }
+                        if ui.button("Done").clicked() {
+                            self.realm_popup = false;
+                        }
+                    },
+                );
             });
     }
 
@@ -520,20 +517,18 @@ impl Launcher {
         };
         ui.painter().add(theme::panel_shape(&self.art, left));
         ui.painter().add(theme::panel_shape(&self.art, right));
-        ui.scope_builder(egui::UiBuilder::new().max_rect(left.shrink(20.0)), |ui| {
-            self.host_setup(ui)
-        });
-        ui.scope_builder(egui::UiBuilder::new().max_rect(right.shrink(20.0)), |ui| {
-            self.host_check(ui)
-        });
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(left.shrink(PANEL_PAD)),
+            |ui| self.host_setup(ui),
+        );
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(right.shrink(PANEL_PAD)),
+            |ui| self.host_check(ui),
+        );
     }
 
     fn host_setup(&mut self, ui: &mut egui::Ui) {
-        ui.label(
-            RichText::new("Host a realm")
-                .font(theme::display(21.0))
-                .color(Color32::WHITE),
-        );
+        panel_title(ui, "Host a realm");
         ui.add_space(8.0);
         let mode = if !self.host {
             0
@@ -663,11 +658,7 @@ impl Launcher {
     }
 
     fn host_check(&mut self, ui: &mut egui::Ui) {
-        ui.label(
-            RichText::new("Setup check")
-                .font(theme::display(21.0))
-                .color(Color32::WHITE),
-        );
+        panel_title(ui, "Setup check");
         ui.add_space(8.0);
         let server_ok = self
             .launcher_dir
@@ -787,4 +778,15 @@ impl Launcher {
             }
         });
     }
+}
+
+/// A purple panel's title, centred below its corner ornaments.
+fn panel_title(ui: &mut egui::Ui, text: &str) {
+    ui.vertical_centered(|ui| {
+        ui.label(
+            RichText::new(text)
+                .font(theme::display(21.0))
+                .color(Color32::WHITE),
+        );
+    });
 }
