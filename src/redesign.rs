@@ -203,10 +203,38 @@ impl Launcher {
                     }
                     ui.add_space(6.0);
                 }
-                ui.hyperlink_to(
-                    RichText::new("All updates on GitHub").color(Color32::WHITE),
-                    "https://github.com/FadedSociety/free-realms-expanded/releases",
+                // A bubble pinned to the bottom of the panel opens the launcher's GitHub page.
+                let area = ui.max_rect();
+                let pill = egui::Rect::from_min_max(
+                    egui::pos2(area.left(), area.bottom() - 44.0),
+                    area.right_bottom(),
                 );
+                let link = ui.interact(pill, ui.id().with("github-updates"), egui::Sense::click());
+                let stroke = if link.hovered() || link.has_focus() {
+                    3.0_f32
+                } else {
+                    2.0_f32
+                };
+                ui.painter().rect(
+                    pill,
+                    22.0,
+                    Color32::WHITE,
+                    egui::Stroke::new(stroke, TEAL_INK),
+                    egui::StrokeKind::Inside,
+                );
+                ui.painter().text(
+                    pill.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "GitHub updates",
+                    theme::display(17.0),
+                    INK,
+                );
+                if link.clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(
+                        "https://github.com/FadedSociety/free-realms-launcher",
+                    ));
+                }
+                link.on_hover_cursor(egui::CursorIcon::PointingHand);
                 if self.patch_active() {
                     self.patch_progress_ui(ui);
                 }
