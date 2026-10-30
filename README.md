@@ -100,8 +100,10 @@ are refused; friends outside your network join through a VPN such as Tailscale.
 
 ### No client yet?
 
-**Settings → Download the client** fetches the whole client (about 0.9 GB, 1,788 files) from the community
-host's `clientmanifest.xml` into `client/` beside the launcher, the same source the community launcher uses.
+**Settings → Download the client** fetches the community's client files (about 0.9 GB, 1,788 files) from the
+community host's `clientmanifest.xml` into `client/` beside the launcher, the same source the community launcher
+uses. That manifest leaves out the ten `AssetsW_*.pack` world packs; whether a client made from it loads every
+zone is not yet tested, so keep your own complete client folder if you have one.
 It checks every file against the manifest's XXH64 hash, resumes an interrupted download, and points the client
 folder setting there when done. Our releases never carry client files. If PLAY reports that DirectX is missing
 (`d3dx9_31.dll`), the link under the message opens Microsoft's DirectX End-User Runtime page.
