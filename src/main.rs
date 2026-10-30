@@ -1412,9 +1412,12 @@ impl Launcher {
                 "On the internet (port forwarding or a server host)",
             );
             if self.host_internet {
-                ui.horizontal(|ui| {
-                    ui.label("Your public IP");
-                    ui.text_edit_singleline(&mut self.host_public);
+                ui.label("Your public IP");
+                // The themed field (dark text) under a layout-independent id: opening a touch
+                // keyboard resizes the window, and an auto id would lose focus and close it.
+                let (art, value) = (&self.art, &mut self.host_public);
+                ui.scope_builder(egui::UiBuilder::new().id("host-public-ip"), |ui| {
+                    theme::text_field(ui, art, value, "e.g. 203.0.113.7", Vec2::new(260.0, 44.0), 45)
                 });
                 ui.small(format!(
                     "Forward these ports to this PC on your router (or open them at your server host): UDP {g} and {l}, TCP {g} and {b}. Players join at your public IP, port {l}.",
