@@ -554,6 +554,9 @@ pub(crate) struct Launcher {
     settings_page: bool,
     /// Redesign 2026-10-30: the Host tab (hosting controls, setup check, HOST & PLAY).
     host_page: bool,
+    /// Redesign 2026-10-30: release news for the Play tab, fetched once in the background.
+    news: Vec<osfr_launcher::release::NewsItem>,
+    news_rx: Option<mpsc::Receiver<Vec<osfr_launcher::release::NewsItem>>>,
     controller_on: bool,
     controller: Option<Controller>,
     controller_status: String,
@@ -633,6 +636,18 @@ impl Launcher {
             settings: LaunchSettings::default(),
             settings_page,
             host_page: false,
+            news: Vec::new(),
+            news_rx: {
+                let (tx, rx) = mpsc::channel();
+                let ctx = cc.egui_ctx.clone();
+                std::thread::spawn(move || {
+                    if let Ok(items) = osfr_launcher::release::fetch_news(4) {
+                        let _ = tx.send(items);
+                        ctx.request_repaint();
+                    }
+                });
+                Some(rx)
+            },
             controller_on: true,
             controller,
             controller_status,
@@ -1338,6 +1353,24 @@ impl Launcher {
             }
         });
         self.patch_progress_ui(ui);
+        if !self.news.is_empty() {
+            ui.add_space(8.0);
+            ui.label(RichText::new("News & updates").font(theme::display(20.0)));
+            for item in &self.news {
+                ui.horizontal(|ui| {
+                    ui.small(&item.date);
+                    if item.url.is_empty() {
+                        ui.label(&item.title);
+                    } else {
+                        ui.hyperlink_to(&item.title, &item.url);
+                    }
+                });
+            }
+            ui.hyperlink_to(
+                "All updates on GitHub",
+                "https://github.com/FadedSociety/free-realms-expanded/releases",
+            );
+        }
     }
 
     fn play_dock(&mut self, ui: &mut egui::Ui, compact: bool, wide: bool) {
@@ -1860,6 +1893,10 @@ impl eframe::App for Launcher {
             if (ctx.zoom_factor() - zoom).abs() > 0.02 {
                 ctx.set_zoom_factor(zoom);
             }
+        }
+        if let Some(Ok(items)) = self.news_rx.as_ref().map(|rx| rx.try_recv()) {
+            self.news = items;
+            self.news_rx = None;
         }
         self.navigation(ctx);
         self.poll_patch();

@@ -456,3 +456,77 @@ mod tests {
         assert_eq!(bytes.len() as u64, smallest.size);
     }
 }
+
+/// One line of the Play tab's news panel (redesign 2026-10-30).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NewsItem {
+    pub title: String,
+    pub date: String,
+    pub url: String,
+}
+
+/// The latest release of the server and of the launcher, newest first, as news for the Play tab.
+/// Uses the same GitHub-only HTTPS rules as the server download.
+pub fn fetch_news(limit: usize) -> Result<Vec<NewsItem>> {
+    let cancel = AtomicBool::new(false);
+    let mut items = Vec::new();
+    for (repo, label) in [(REPO, "Server"), ("FadedSociety/free-realms-launcher", "Launcher")] {
+        let url = Url::release(&format!("https://api.github.com/repos/{repo}/releases/latest"))?;
+        let body = fetch_bytes(&url, 1 << 20, &cancel)?;
+        items.extend(news_items(&body, label)?);
+    }
+    items.sort_by(|a, b| b.date.cmp(&a.date));
+    items.truncate(limit);
+    Ok(items)
+}
+
+fn news_items(body: &[u8], label: &str) -> Result<Vec<NewsItem>> {
+    // `releases/latest` answers one object (lists come chunked, which downloads refuse); both parse.
+    let list = match serde_json::from_slice(body)
+        .map_err(|_| "GitHub sent unreadable release news.".to_owned())?
+    {
+        serde_json::Value::Array(list) => list,
+        one => vec![one],
+    };
+    Ok(list
+        .iter()
+        .filter(|r| r.get("draft").and_then(|v| v.as_bool()) != Some(true))
+        .map(|r| {
+            let text = |k: &str| r.get(k).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+            let name = if text("name").is_empty() { text("tag_name") } else { text("name") };
+            let url = text("html_url");
+            NewsItem {
+                title: format!("{label} {name}"),
+                date: text("published_at").chars().take(10).collect(),
+                url: if url.starts_with("https://github.com/") { url } else { String::new() },
+            }
+        })
+        .collect())
+}
+
+#[cfg(test)]
+mod news_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "live GitHub request"]
+    fn live_news_fetch() {
+        let t = std::time::Instant::now();
+        let news = fetch_news(4);
+        println!("{:?} in {:?}", news, t.elapsed());
+        assert!(news.is_ok());
+    }
+
+    #[test]
+    fn news_lists_published_releases_and_keeps_only_github_links() {
+        let body = br#"[{"name":"v0.2.3 (early preview)","tag_name":"v0.2.3","published_at":"2026-10-30T22:00:00Z","html_url":"https://github.com/FadedSociety/free-realms-launcher/releases/tag/v0.2.3","draft":false},
+            {"name":"","tag_name":"v9","published_at":"2026-10-31T00:00:00Z","html_url":"https://evil.example/x","draft":false},
+            {"name":"draft","published_at":"2026-11-01T00:00:00Z","draft":true}]"#;
+        let items = news_items(body, "Launcher").unwrap();
+        assert_eq!(items.len(), 2, "drafts are not news");
+        assert_eq!(items[0].title, "Launcher v0.2.3 (early preview)");
+        assert_eq!(items[0].date, "2026-10-30");
+        assert_eq!(items[1].title, "Launcher v9", "the tag stands in for an empty name");
+        assert!(items[1].url.is_empty(), "only github.com links are shown");
+    }
+}
