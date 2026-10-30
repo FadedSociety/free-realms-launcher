@@ -34,7 +34,8 @@ const AUTH_BROKER_PORT: u16 = 20043;
 fn load_banner(ctx: &egui::Context) -> Result<egui::TextureHandle, String> {
     // (R) Fit bundled art to the current limit, including before the first frame.
     let limit = ctx.input(|input| input.max_texture_side) as u32;
-    let image = image::load_from_memory(include_bytes!("../assets/ui/banner.png"))
+    // Redesign 2026-10-30: the wordmark alone heads the window; the cast lives beside PLAY.
+    let image = image::load_from_memory(include_bytes!("../assets/ui/logo.png"))
         .map_err(|_| "The bundled banner could not be decoded.".to_owned())?
         .thumbnail(limit, limit)
         .into_rgba8();
@@ -1850,9 +1851,10 @@ impl eframe::App for Launcher {
                         220.0
                     });
                     ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                        let [logo_w, logo_h] = self.banner.size();
                         let banner_rect = ui
                             .allocate_exact_size(
-                                Vec2::new(banner_height * 3.0, banner_height),
+                                Vec2::new(banner_height * logo_w as f32 / logo_h as f32, banner_height),
                                 egui::Sense::hover(),
                             )
                             .0;
@@ -1862,7 +1864,6 @@ impl eframe::App for Launcher {
                             theme::unit_uv(),
                             Color32::WHITE,
                         );
-                        self.art.draw_vines(ui.painter(), banner_rect, &theme::VINE_ANCHORS);
                     });
                     ui.add_space(2.0);
                     let panel_slot = ui.painter().add(egui::Shape::Noop);
@@ -2691,7 +2692,8 @@ mod tests {
         let limit = ctx.input(|input| input.max_texture_side);
         let [width, height] = banner.size();
         assert!(width > 0 && height > 0 && width <= limit && height <= limit);
-        assert!((width as f32 / height as f32 - 3.0).abs() < 0.01);
+        // Redesign 2026-10-30: the wordmark (869x300) replaces the 3:1 banner.
+        assert!((width as f32 / height as f32 - 869.0 / 300.0).abs() < 0.01);
     }
 
     #[test]
