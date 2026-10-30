@@ -98,6 +98,14 @@ three new accounts an hour from one address and 64 in all. To let only certain p
 one per line, in `server/state/whitelist.txt`. Your own account is the realm's admin. Public internet addresses
 are refused; friends outside your network join through a VPN such as Tailscale.
 
+### No client yet?
+
+**Settings → Download the client** fetches the whole client (about 0.9 GB, 1,788 files) from the community
+host's `clientmanifest.xml` into `client/` beside the launcher, the same source the community launcher uses.
+It checks every file against the manifest's XXH64 hash, resumes an interrupted download, and points the client
+folder setting there when done. Our releases never carry client files. If PLAY reports that DirectX is missing
+(`d3dx9_31.dll`), the link under the message opens Microsoft's DirectX End-User Runtime page.
+
 ### What the release contains
 
 The project lead decides what a release contains; the launcher installs exactly the files the release manifest

@@ -83,6 +83,14 @@ struct PatchJob {
     result: mpsc::Receiver<Result<patch::PatchReport, String>>,
 }
 
+/// L070: the client download from the community host, running off the UI thread.
+struct ClientJob {
+    folder: PathBuf,
+    cancel: Arc<AtomicBool>,
+    result: mpsc::Receiver<Result<patch::PatchReport, String>>,
+    progress: Arc<Mutex<Progress>>,
+}
+
 /// The local server's install or update check, running off the UI thread.
 struct ServerJob {
     cancel: Arc<AtomicBool>,
@@ -556,6 +564,7 @@ pub(crate) struct Launcher {
     host_address: Option<std::net::IpAddr>,
     /// L070: the last PLAY stopped on a missing DirectX runtime; the installer link shows.
     directx_missing: bool,
+    client_job: Option<ClientJob>,
 }
 
 impl Launcher {
@@ -625,12 +634,17 @@ impl Launcher {
             host_choices: Vec::new(),
             host_address: None,
             directx_missing: false,
+            client_job: None,
         })
     }
 
     fn play(&mut self) {
         // A screenshot run cannot prepare files or launch a child, even by pad.
         if self.screenshot.is_some() || self.pending.is_some() || self.child.is_some() {
+            return;
+        }
+        if self.client_job.is_some() {
+            self.message = "Wait for the client download to finish, or stop it in Settings.".into();
             return;
         }
         if !self.patch_allows_play() {
@@ -683,6 +697,10 @@ impl Launcher {
             || self.pending_local.is_some()
             || self.child.is_some()
         {
+            return;
+        }
+        if self.client_job.is_some() {
+            self.message = "Wait for the client download to finish, or stop it in Settings.".into();
             return;
         }
         let Some(root) = self.launcher_dir.clone() else {
@@ -803,6 +821,74 @@ impl Launcher {
         }
         if done.is_some() {
             self.server_job = None;
+        }
+    }
+
+    /// L070: download (or repair) the client into `client/` beside the launcher from the
+    /// community host; the client folder setting points there once every file checks out.
+    fn start_client_download(&mut self) {
+        let Some(root) = self.launcher_dir.clone() else {
+            return;
+        };
+        if self.screenshot.is_some() || self.client_job.is_some() {
+            return;
+        }
+        let folder = root.join("client");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let progress = Arc::new(Mutex::new(Progress::default()));
+        let (sender, result) = mpsc::channel();
+        let (target, stopping, state) = (folder.clone(), cancel.clone(), progress.clone());
+        std::thread::spawn(move || {
+            let outcome = patch::download_client(&target, &stopping, |p| {
+                if let Ok(mut state) = state.lock() {
+                    *state = p.clone();
+                }
+            });
+            let _ = sender.send(outcome);
+        });
+        self.message = "Fetching the client list from the community host...".into();
+        self.client_job = Some(ClientJob {
+            folder,
+            cancel,
+            result,
+            progress,
+        });
+    }
+
+    fn poll_client(&mut self) {
+        let Some(job) = &self.client_job else {
+            return;
+        };
+        match job.result.try_recv() {
+            Ok(Ok(report)) => {
+                self.client = job.folder.display().to_string();
+                self.message = format!(
+                    "Client ready in {} ({} files downloaded).",
+                    self.client, report.files_downloaded
+                );
+                self.client_job = None;
+            }
+            Ok(Err(error)) => {
+                self.message = error;
+                self.client_job = None;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.message = "The client download stopped. Download again to resume.".into();
+                self.client_job = None;
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                let p = job.progress.lock().map(|p| p.clone()).unwrap_or_default();
+                if p.bytes_total > 0 {
+                    self.message = format!(
+                        "{} the client: {} of {} files, {} of {} MB.",
+                        p.phase,
+                        p.files_done,
+                        p.files_total,
+                        p.bytes_done >> 20,
+                        p.bytes_total >> 20
+                    );
+                }
+            }
         }
     }
 
@@ -1453,6 +1539,24 @@ impl Launcher {
             32768,
         );
         self.record_focus(FocusTarget::ClientFolder, &client);
+        if self.launcher_dir.is_some() {
+            ui.horizontal(|ui| {
+                if let Some(job) = &self.client_job {
+                    if ui.button("Stop the client download").clicked() {
+                        job.cancel.store(true, Ordering::Relaxed);
+                    }
+                } else {
+                    let idle = self.screenshot.is_none() && self.pending.is_none() && self.child.is_none();
+                    if ui
+                        .add_enabled(idle, egui::Button::new("Download the client (about 0.9 GB)"))
+                        .clicked()
+                    {
+                        self.start_client_download();
+                    }
+                }
+                ui.small("From the community host into client/ beside the launcher. It resumes and checks every file.");
+            });
+        }
         let locale = theme::text_field(
             ui,
             &self.art,
@@ -1570,6 +1674,7 @@ impl eframe::App for Launcher {
             || self.pending.is_some()
             || self.patch_job.is_some()
             || self.server_job.is_some()
+            || self.client_job.is_some()
             || growing
             || capture_waiting
         {
@@ -1578,6 +1683,7 @@ impl eframe::App for Launcher {
         self.navigation(ctx);
         self.poll_patch();
         self.poll_server();
+        self.poll_client();
         if let Some(receiver) = &self.pending_local {
             match receiver.try_recv() {
                 Ok(result) => {

@@ -59,6 +59,9 @@ pub(crate) struct Entry {
     pub sha256: String,
     #[serde(default)]
     pub asset: Option<String>,
+    /// L070: the community client manifest's XXH64 (seed 0) in place of `sha256`.
+    #[serde(skip)]
+    pub xxh64: Option<u64>,
 }
 
 /// Manifest size caps: file count, one file, all files.
@@ -123,13 +126,23 @@ fn manifest(bytes: &[u8], pin: &str) -> Result<Manifest> {
 pub(crate) fn parse(bytes: &[u8], limits: &Limits) -> Result<Manifest> {
     let value: Manifest =
         serde_json::from_slice(bytes).map_err(|_| "Invalid patch manifest JSON.")?;
-    if value.version != 1 || value.files.is_empty() || value.files.len() > limits.files {
+    if value.version != 1 {
+        return Err("Unsupported or empty patch manifest.".into());
+    }
+    check(&value.files, limits)?;
+    Ok(value)
+}
+
+/// Every entry's path, hash and size, no duplicate or overlapping paths, and the size limits.
+fn check(files: &[Entry], limits: &Limits) -> Result<()> {
+    if files.is_empty() || files.len() > limits.files {
         return Err("Unsupported or empty patch manifest.".into());
     }
     let mut names = BTreeSet::new();
     let mut total = 0_u64;
-    for entry in &value.files {
-        if !valid_path(&entry.path) || !valid_hash(&entry.sha256) || entry.size > limits.file {
+    for entry in files {
+        let hashed = entry.xxh64.is_some() || valid_hash(&entry.sha256);
+        if !valid_path(&entry.path) || !hashed || entry.size > limits.file {
             return Err("Unsafe patch path, hash or file size in manifest.".into());
         }
         if !names.insert(entry.path.to_ascii_lowercase()) {
@@ -149,7 +162,7 @@ pub(crate) fn parse(bytes: &[u8], limits: &Limits) -> Result<Manifest> {
             }
         }
     }
-    Ok(value)
+    Ok(())
 }
 
 pub(crate) fn root(client: &Path) -> Result<PathBuf> {
@@ -189,8 +202,14 @@ pub(crate) fn matches(path: &Path, entry: &Entry, cancel: &AtomicBool) -> Result
     if no_link(path)?.len() != entry.size {
         return Ok(false);
     }
-    Ok(hash_reader(File::open(path).map_err(io_error)?, cancel)?
-        .eq_ignore_ascii_case(&entry.sha256))
+    verified(File::open(path).map_err(io_error)?, entry, cancel)
+}
+
+fn verified(reader: impl Read, entry: &Entry, cancel: &AtomicBool) -> Result<bool> {
+    Ok(match entry.xxh64 {
+        Some(hash) => xxh64_reader(reader, cancel)? == hash,
+        None => hash_reader(reader, cancel)?.eq_ignore_ascii_case(&entry.sha256),
+    })
 }
 
 /// Always rehash every existing file, including same-size files. This is both
@@ -210,7 +229,7 @@ pub fn repair(
         .map(Url::parse)
         .collect::<Result<_>>()?;
     let root = root(client)?;
-    let mut status = Progress {
+    let status = Progress {
         phase: "Fetching manifest",
         ..Default::default()
     };
@@ -235,19 +254,33 @@ pub fn repair(
         }
         backoff(attempt, cancel)?;
     }
-    let manifest = parsed.ok_or_else(|| error.clone())?;
+    let manifest = parsed.ok_or(error)?;
+    install(&root, &manifest.files, &urls, cancel, status, progress)
+}
+
+/// Verify every file and download the missing or wrong ones from the first URL that serves them.
+fn install(
+    root: &Path,
+    files: &[Entry],
+    urls: &[Url],
+    cancel: &AtomicBool,
+    mut status: Progress,
+    mut progress: impl FnMut(&Progress),
+) -> Result<PatchReport> {
+    let root = root.to_path_buf();
+    let mut error = "Could not download a client file.".to_owned();
     // Validate every target before downloading any file, including unsafe links
     // on entries that would otherwise be skipped as up to date.
-    for entry in &manifest.files {
+    for entry in files {
         cancelled(cancel)?;
         target(&root, &entry.path)?;
         target(&root, &format!("{}{PART}", entry.path))?;
     }
-    status.files_total = manifest.files.len();
-    status.bytes_total = manifest.files.iter().map(|e| e.size).sum();
+    status.files_total = files.len();
+    status.bytes_total = files.iter().map(|e| e.size).sum();
     let mut report = PatchReport::default();
     let mut completed_bytes = 0;
-    for entry in &manifest.files {
+    for entry in files {
         cancelled(cancel)?;
         status.current_file = entry.path.clone();
         status.phase = "Verifying";
@@ -257,7 +290,7 @@ pub fn repair(
         if !matches(&destination, entry, cancel)? {
             let mut installed = false;
             for attempt in 0..3 {
-                for url in &urls {
+                for url in urls {
                     cancelled(cancel)?;
                     status.phase = "Downloading";
                     let result = download(
@@ -439,11 +472,18 @@ pub(crate) fn download(
     }
     cancelled(cancel)?;
     file.seek(SeekFrom::Start(0)).map_err(io_error)?;
-    if !hash_reader(&mut file, cancel)?.eq_ignore_ascii_case(&entry.sha256) {
+    if !verified(&mut file, entry, cancel)? {
         // A corrupt prefix cannot be trusted. Keep the temp name but restart
         // from zero on the next bounded attempt; never install these bytes.
         file.set_len(0).map_err(io_error)?;
-        return Err("Patch SHA-256 mismatch. Discarded corrupt partial bytes.".into());
+        let kind = if entry.xxh64.is_some() {
+            "XXH64"
+        } else {
+            "SHA-256"
+        };
+        return Err(format!(
+            "Patch {kind} mismatch. Discarded corrupt partial bytes."
+        ));
     }
     drop(file);
     cancelled(cancel)?;
@@ -455,6 +495,181 @@ pub(crate) fn download(
     // Same-directory rename replaces atomically, preserving the old destination
     // on failure. Never remove the installed file first.
     fs::rename(&partial, destination).map_err(io_error)
+}
+
+/// L070: the community host's client manifest and file root (the source the community launcher
+/// installs from; the owner chose it 2026-10-28). Our releases never carry client files.
+pub const CLIENT_MANIFEST_URL: &str = "https://opensourcefreerealms.com/clientmanifest.xml";
+const CLIENT_FILES_URL: &str = "https://opensourcefreerealms.com/client/";
+/// The client is about 0.9 GB in 1,788 files (2026-10-12 manifest); the caps leave room to grow.
+const CLIENT_LIMITS: Limits = Limits {
+    files: 20_000,
+    file: 1024 * 1024 * 1024,
+    total: 16 * 1024 * 1024 * 1024,
+};
+
+/// L070: install or repair the whole client in `client` from the community host, resuming
+/// partial files. (R) XXH64 catches corruption, not a hostile host: the HTTPS host is trusted,
+/// as it is for the executable it serves.
+pub fn download_client(
+    client: &Path,
+    cancel: &AtomicBool,
+    progress: impl FnMut(&Progress),
+) -> Result<PatchReport> {
+    cancelled(cancel)?;
+    fs::create_dir_all(client).map_err(io_error)?;
+    let root = root(client)?;
+    let manifest = Url::parse(CLIENT_MANIFEST_URL)?;
+    let mut error = "Could not fetch the client manifest.".to_owned();
+    let mut files = None;
+    for attempt in 0..3 {
+        match fetch_bytes(&manifest, MANIFEST_LIMIT, cancel).and_then(|bytes| {
+            let text = String::from_utf8(bytes).map_err(|_| "Client manifest is not UTF-8.")?;
+            client_manifest(&text)
+        }) {
+            Ok(parsed) => {
+                files = Some(parsed);
+                break;
+            }
+            Err(e) => error = e,
+        }
+        backoff(attempt, cancel)?;
+    }
+    let files = files.ok_or(error)?;
+    let status = Progress {
+        phase: "Verifying",
+        ..Default::default()
+    };
+    install(
+        &root,
+        &files,
+        &[Url::parse(CLIENT_FILES_URL)?],
+        cancel,
+        status,
+        progress,
+    )
+}
+
+/// L070: `clientmanifest.xml`: nested `<Folder name>` elements holding `<File name size hash>`,
+/// the hash an XXH64 in decimal. Only that shape is read; anything else in a tag is refused.
+pub(crate) fn client_manifest(xml: &str) -> Result<Vec<Entry>> {
+    let bad = || "Invalid client manifest.".to_owned();
+    let attribute = |tag: &str, name: &str| {
+        let start = tag.find(&format!(" {name}=\""))? + name.len() + 3;
+        tag[start..].split('"').next().map(str::to_owned)
+    };
+    let (mut folders, mut files) = (Vec::<String>::new(), Vec::new());
+    for tag in xml.split('<').skip(1) {
+        let tag = tag.split('>').next().ok_or_else(bad)?.trim();
+        if tag.starts_with('?') || tag.starts_with("ClientManifest") || tag == "/ClientManifest" {
+            continue;
+        }
+        if tag == "/Folder" {
+            folders.pop().ok_or_else(bad)?;
+        } else if let Some(rest) = tag.strip_prefix("Folder") {
+            if !rest.ends_with('/') {
+                folders.push(attribute(tag, "name").unwrap_or_default());
+            }
+        } else if tag.starts_with("File ") && tag.ends_with('/') {
+            let name = attribute(tag, "name").ok_or_else(bad)?;
+            let number = |key| attribute(tag, key).and_then(|v| v.parse::<u64>().ok());
+            let (Some(size), Some(hash)) = (number("size"), number("hash")) else {
+                return Err(bad());
+            };
+            let mut path: Vec<&str> = folders
+                .iter()
+                .map(String::as_str)
+                .filter(|f| !f.is_empty())
+                .collect();
+            path.push(&name);
+            files.push(Entry {
+                path: path.join("/"),
+                size,
+                sha256: String::new(),
+                asset: None,
+                xxh64: Some(hash),
+            });
+        } else {
+            return Err(bad());
+        }
+    }
+    if !folders.is_empty() {
+        return Err(bad());
+    }
+    check(&files, &CLIENT_LIMITS)?;
+    Ok(files)
+}
+
+/// XXH64 with seed 0 over a whole reader (client files are tens of MB at most).
+fn xxh64_reader(mut reader: impl Read, cancel: &AtomicBool) -> Result<u64> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        cancelled(cancel)?;
+        let count = reader.read(&mut buffer).map_err(io_error)?;
+        if count == 0 {
+            return Ok(xxh64(&bytes));
+        }
+        bytes.extend_from_slice(&buffer[..count]);
+    }
+}
+
+/// XXH64, seed 0 (the xxHash specification); checked against the standard vectors and against
+/// real client files' manifest hashes.
+pub fn xxh64(data: &[u8]) -> u64 {
+    const P1: u64 = 0x9E37_79B1_85EB_CA87;
+    const P2: u64 = 0xC2B2_AE3D_27D4_EB4F;
+    const P3: u64 = 0x1656_67B1_9E37_79F9;
+    const P4: u64 = 0x85EB_CA77_C2B2_AE63;
+    const P5: u64 = 0x27D4_EB2F_1656_67C5;
+    let round = |acc: u64, input: u64| {
+        acc.wrapping_add(input.wrapping_mul(P2))
+            .rotate_left(31)
+            .wrapping_mul(P1)
+    };
+    let word = |at: &[u8]| u64::from_le_bytes(at[..8].try_into().unwrap());
+    let mut rest = data;
+    let mut hash = if data.len() >= 32 {
+        let mut v = [P1.wrapping_add(P2), P2, 0, P1.wrapping_neg()];
+        while rest.len() >= 32 {
+            for (lane, value) in v.iter_mut().enumerate() {
+                *value = round(*value, word(&rest[lane * 8..]));
+            }
+            rest = &rest[32..];
+        }
+        let mut hash = v[0]
+            .rotate_left(1)
+            .wrapping_add(v[1].rotate_left(7))
+            .wrapping_add(v[2].rotate_left(12))
+            .wrapping_add(v[3].rotate_left(18));
+        for value in v {
+            hash = (hash ^ round(0, value)).wrapping_mul(P1).wrapping_add(P4);
+        }
+        hash
+    } else {
+        P5
+    };
+    hash = hash.wrapping_add(data.len() as u64);
+    while rest.len() >= 8 {
+        hash ^= round(0, word(rest));
+        hash = hash.rotate_left(27).wrapping_mul(P1).wrapping_add(P4);
+        rest = &rest[8..];
+    }
+    if rest.len() >= 4 {
+        let half = u32::from_le_bytes(rest[..4].try_into().unwrap());
+        hash ^= u64::from(half).wrapping_mul(P1);
+        hash = hash.rotate_left(23).wrapping_mul(P2).wrapping_add(P3);
+        rest = &rest[4..];
+    }
+    for &byte in rest {
+        hash ^= u64::from(byte).wrapping_mul(P5);
+        hash = hash.rotate_left(11).wrapping_mul(P1);
+    }
+    hash ^= hash >> 33;
+    hash = hash.wrapping_mul(P2);
+    hash ^= hash >> 29;
+    hash = hash.wrapping_mul(P3);
+    hash ^ (hash >> 32)
 }
 
 /// Hosts a release download may touch, over HTTPS port 443 only.
@@ -925,7 +1140,66 @@ mod native {
 
 #[cfg(test)]
 mod tests {
-    use super::Url;
+    use super::{Url, client_manifest, xxh64};
+
+    /// L070: the xxHash specification's vectors (seed 0); real client files were also checked
+    /// against their manifest hashes (actionIndex.dat, FreeRealms.exe) outside the repository.
+    #[test]
+    fn xxh64_matches_the_reference_vectors() {
+        assert_eq!(xxh64(b""), 0xEF46_DB37_51D8_E999);
+        assert_eq!(xxh64(b"abc"), 0x44BC_2CF5_AD77_0999);
+        // Long input exercises the four-lane stripe loop and the 8/4/1-byte tails.
+        let long: Vec<u8> = (0..=255u8).cycle().take(1000).collect();
+        assert_ne!(xxh64(&long), xxh64(&long[1..]));
+    }
+
+    /// L070: the live community manifest parses whole (1,788 files on 2026-10-12) and lists the
+    /// executable and the DirectX DLL beside it.
+    #[test]
+    #[ignore = "needs network"]
+    fn live_client_manifest_parses() {
+        let url = Url::parse(super::CLIENT_MANIFEST_URL).unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let bytes = super::fetch_bytes(&url, super::MANIFEST_LIMIT, &cancel).unwrap();
+        let files = client_manifest(std::str::from_utf8(&bytes).unwrap()).unwrap();
+        assert!(files.len() > 1000, "{}", files.len());
+        for name in ["FreeRealms.exe", "d3dx9_31.dll"] {
+            assert!(files.iter().any(|f| f.path == name), "{name}");
+        }
+    }
+
+    /// L070: nested folders make the paths; unsafe names, broken nesting and stray tags refuse
+    /// the whole manifest.
+    #[test]
+    fn the_client_manifest_reads_nested_folders_and_refuses_unsafe_entries() {
+        let xml = r#"<?xml version='1.0' encoding='utf-8'?>
+<ClientManifest version="1" languages="en_us">
+  <Folder>
+    <Folder name="data" />
+    <Folder name="tcg">
+      <File name="index.dat" size="15237" hash="16582454773280641639" />
+    </Folder>
+    <File name="FreeRealms.exe" size="25067520" hash="14615788379343038154" />
+  </Folder>
+</ClientManifest>"#;
+        let files = client_manifest(xml).unwrap();
+        let paths: Vec<_> = files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["tcg/index.dat", "FreeRealms.exe"]);
+        assert_eq!(files[0].xxh64, Some(16582454773280641639));
+        assert_eq!(files[1].size, 25067520);
+        for bad in [
+            xml.replace("index.dat", "../escape.dat"),
+            xml.replace("index.dat", "CON.dat"),
+            xml.replace(
+                "<Folder name=\"tcg\">",
+                "<Folder name=\"tcg\"><Folder name=\"x\">",
+            ),
+            xml.replace("hash=\"16582454773280641639\"", "hash=\"abc\""),
+            xml.replace("<Folder name=\"data\" />", "<Script name=\"x\" />"),
+        ] {
+            assert!(client_manifest(&bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn release_urls_are_github_https_or_loopback_http() {
