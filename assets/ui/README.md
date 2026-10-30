@@ -78,3 +78,7 @@ pixel thresholds. Vines use roots `[10,161]`, `[11,180]`, `[8,161]`,
 `[9,189]` and are anchored along the banner wordmark's right edge; a pixel test
 checks full reveal and the 0.3/0.8 growth states against the protected wordmark,
 starburst and other banner copy boxes.
+
+## Redesign art (2026-10-30)
+
+The launcher redesign replaced the beaded skin, the vines and the 3:1 banner with painted Free Realms style art: `backdrop.png`, `button_*.png`, `play_*.png`, `tab_*.png`, `panel.png`, `list_row.png`, `text_field.png`, `pip_*.png`, `plank.png`, the three `icon_*.png`, `logo.png` and `hero_cast.png`. All of it is original, AI-generated art made for this project (sprite sheets from GPT Image, prompted by the project lead and owner; the background, frames and PLAY pill from Codex image generation), cut, trimmed and resized to 2x by lab scripts. No game client files or third-party art. Hover, pressed and disabled states are derived from each normal state (brightness and desaturation).
