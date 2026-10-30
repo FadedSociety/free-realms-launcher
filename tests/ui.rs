@@ -117,7 +117,7 @@ fn settings_render_fingerprint_copy_button_and_host_instruction() {
     let visible = format!("{:?}", output.shapes);
     assert!(visible.contains("Short fingerprint to compare: 0011-2233-4455-6677"));
     assert!(
-        visible.contains("Send this public key to your host so they can add it to your account.")
+        visible.contains("An open realm makes your account on your first PLAY. If your host lists players, send them this key.")
     );
     let actual: Vec<_> = launcher
         .focus_targets

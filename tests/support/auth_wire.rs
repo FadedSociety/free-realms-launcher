@@ -75,3 +75,31 @@ fn profile_validation_and_cli_reject_paths_and_remote_brokers() {
     );
     assert!(crate::key_command(["--other"]).is_none());
 }
+
+/// L070 join by address: the realm's answer to a challenge carries its identity, which the
+/// player compares (as a fingerprint) with the host's before a profile pins it. Public and
+/// malformed broker addresses are refused before any connection.
+#[test]
+fn fetch_identity_reads_the_challenge_identity_and_refuses_public_brokers() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut frame = [0; 24];
+        stream.read_exact(&mut frame).unwrap();
+        assert_eq!(&frame[4..], b"AUTH2\x01\x0a\0\0\0join-check");
+        let mut reply = [0; 69];
+        reply[0] = 1;
+        reply[1..33].copy_from_slice(&[7; 32]);
+        stream.write_all(&reply).unwrap();
+    });
+    assert_eq!(fetch_identity(&address.to_string()), Ok([7; 32]));
+    server.join().unwrap();
+    for broker in ["8.8.8.8:20043", "0.0.0.0:20043", "realm.example:20043", ""] {
+        assert_eq!(
+            fetch_identity(broker),
+            Err(AuthError::InvalidProfile),
+            "{broker}"
+        );
+    }
+}

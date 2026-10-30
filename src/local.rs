@@ -6,7 +6,7 @@
 
 use std::{
     fs, io,
-    net::{SocketAddr, TcpStream, UdpSocket},
+    net::{IpAddr, SocketAddr, TcpStream, UdpSocket},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
@@ -14,6 +14,9 @@ use std::{
 
 /// The AUTH2 broker port the launcher's realm login uses (`main.rs` `AUTH_BROKER_PORT`).
 pub const BROKER_PORT: u16 = 20043;
+/// L070: a hosted realm's fixed game and login ports, so friends (and a router) know them.
+pub const GATEWAY_PORT: u16 = 20041;
+pub const LOGIN_PORT: u16 = 20042;
 /// The account handle the local profile is enrolled under.
 pub const LOCAL_HANDLE: &str = "local";
 /// How long a server may take to open its port before PLAY gives up and shows its log.
@@ -169,6 +172,10 @@ pub struct LocalSettings {
     pub terrain: Option<PathBuf>,
     pub world: Option<PathBuf>,
     pub dev_tools: bool,
+    /// L070: this PC's LAN or VPN address to host friends on. `None` keeps the realm on this PC.
+    /// A hosted realm is open: a friend's first login makes their account, unless the
+    /// `whitelist.txt` beside the account store lists the handles that may join.
+    pub host: Option<IpAddr>,
 }
 
 impl LocalSettings {
@@ -185,12 +192,18 @@ impl LocalSettings {
             terrain: optional("terrain"),
             world: optional("world"),
             dev_tools: false,
+            host: None,
         }
     }
 
     /// The account store osfr-login and the gateway share (osfr-login's default sibling).
     pub fn account_store(&self) -> PathBuf {
         self.identity.with_extension("accounts.json")
+    }
+
+    /// L070: the handles allowed to join a hosted realm, one per line; absent = open to anyone.
+    pub fn whitelist(&self) -> PathBuf {
+        self.identity.with_file_name("whitelist.txt")
     }
 
     /// Required server inputs that do not exist; PLAY refuses while any is missing. The login
@@ -294,6 +307,9 @@ pub fn gateway_args(settings: &LocalSettings, client: &Path, plan: &RunPlan) -> 
     if let Some(terrain) = &settings.terrain {
         args.extend(["--terrain".into(), path(terrain)]);
     }
+    if settings.host.is_some() {
+        args.push("--allow-lan".into());
+    }
     if settings.dev_tools {
         args.extend([
             "--dev-tools".into(),
@@ -310,7 +326,7 @@ pub fn gateway_args(settings: &LocalSettings, client: &Path, plan: &RunPlan) -> 
 /// The login command line in key-pair mode: the launcher's own profile key is the credential.
 pub fn login_args(settings: &LocalSettings, client: &Path, plan: &RunPlan) -> Vec<String> {
     let path = |p: &Path| p.display().to_string();
-    vec![
+    let mut args = vec![
         "--bind".into(),
         plan.login.to_string(),
         "--auth-bind".into(),
@@ -333,7 +349,17 @@ pub fn login_args(settings: &LocalSettings, client: &Path, plan: &RunPlan) -> Ve
         path(&plan.server_id),
         "--seconds".into(),
         "0".into(),
-    ]
+    ];
+    if settings.host.is_some() {
+        args.push("--allow-lan".into());
+        let whitelist = settings.whitelist();
+        if whitelist.is_file() {
+            args.extend(["--enroll-handles".into(), path(&whitelist)]);
+        } else {
+            args.push("--open-enrollment".into());
+        }
+    }
+    args
 }
 
 /// `osfr-account create`: enroll the local profile's public key once.
@@ -349,26 +375,86 @@ pub fn enroll_args(settings: &LocalSettings, public_key_hex: &str) -> Vec<String
     ]
 }
 
-/// Enroll the local profile's public key with the bundled `osfr-account` (no console window).
-pub fn enroll(settings: &LocalSettings, public_key_hex: &str) -> io::Result<()> {
+/// Enroll the local profile's public key with the bundled `osfr-account` (no console window);
+/// returns the new account's id.
+pub fn enroll(settings: &LocalSettings, public_key_hex: &str) -> io::Result<u64> {
     if let Some(parent) = settings.account_store().parent() {
         fs::create_dir_all(parent)?;
     }
+    let out = account_tool(settings, &enroll_args(settings, public_key_hex))?;
+    out.trim()
+        .strip_prefix("created account ")
+        .and_then(|id| id.parse().ok())
+        .ok_or_else(|| io::Error::other(format!("osfr-account answered {out:?}")))
+}
+
+/// L070: the host's own account is the realm's admin (the role behind `realm` commands); friends
+/// who join are players. Run before the servers start, like [`enroll`].
+pub fn make_admin(settings: &LocalSettings, account_id: u64) -> io::Result<()> {
+    let store = settings.account_store().display().to_string();
+    let id = account_id.to_string();
+    account_tool(
+        settings,
+        &[
+            "set-role",
+            "--store",
+            &store,
+            "--account-id",
+            &id,
+            "--role",
+            "admin",
+        ]
+        .map(String::from),
+    )
+    .map(drop)
+}
+
+fn account_tool(settings: &LocalSettings, args: &[String]) -> io::Result<String> {
     let mut command = Command::new(settings.bin_dir.join("osfr-account.exe"));
-    command.args(enroll_args(settings, public_key_hex));
+    command.args(args);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    let status = command.status()?;
-    if status.success() {
-        Ok(())
+    let output = command.output()?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
         Err(io::Error::other(format!(
-            "osfr-account could not enroll the local profile ({status})"
+            "osfr-account {} failed ({}): {}",
+            args[0],
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
         )))
     }
+}
+
+/// L070: this PC's addresses a realm can be hosted on: the LAN route's and, when a VPN such as
+/// Tailscale is up, its 100.64.0.0/10 address. A UDP connect only picks the route the OS would
+/// use; no packet is sent. Only private addresses are offered (the servers refuse public ones).
+pub fn host_addresses() -> Vec<IpAddr> {
+    let mut found = Vec::new();
+    for probe in ["192.0.2.1:9", "100.100.100.100:9"] {
+        let route = UdpSocket::bind("0.0.0.0:0").and_then(|socket| {
+            socket.connect(probe)?;
+            socket.local_addr()
+        });
+        if let Ok(address) = route {
+            let ip = address.ip();
+            let private = match ip {
+                IpAddr::V4(v4) => {
+                    let [a, b, ..] = v4.octets();
+                    v4.is_private() || (a == 100 && (64..128).contains(&b))
+                }
+                IpAddr::V6(_) => false,
+            };
+            if private && !found.contains(&ip) {
+                found.push(ip);
+            }
+        }
+    }
+    found
 }
 
 /// The kept 32-byte server id (made on first run); its hex is the local realm's identity.
@@ -402,6 +488,8 @@ pub struct LocalRealm {
     pub login: SocketAddr,
     pub broker: SocketAddr,
     pub log_dir: PathBuf,
+    /// The server identity friends compare with what their launcher shows.
+    pub identity: [u8; 32],
 }
 
 impl LocalRealm {
@@ -421,20 +509,33 @@ impl LocalRealm {
         let mut key = [0u8; 16];
         getrandom::getrandom(&mut key).map_err(|_| io::Error::other("no OS randomness"))?;
         fs::write(&handoff_key, key)?;
+        let (gateway, login, broker) = match settings.host {
+            Some(ip) => (
+                SocketAddr::new(ip, GATEWAY_PORT),
+                SocketAddr::new(ip, LOGIN_PORT),
+                SocketAddr::new(ip, BROKER_PORT),
+            ),
+            None => (
+                free_udp_port()?,
+                free_udp_port()?,
+                SocketAddr::from(([127, 0, 0, 1], BROKER_PORT)),
+            ),
+        };
         let plan = RunPlan {
-            gateway: free_udp_port()?,
-            login: free_udp_port()?,
-            broker: SocketAddr::from(([127, 0, 0, 1], BROKER_PORT)),
+            gateway,
+            login,
+            broker,
             server_id: realm_dir.join("server.id"),
             handoff_key,
             log_dir: log_dir.clone(),
         };
-        server_identity(&plan.server_id)?;
+        let identity = server_identity(&plan.server_id)?;
         let mut realm = Self {
             children: Vec::new(),
             login: plan.login,
             broker: plan.broker,
             log_dir,
+            identity,
         };
         let gateway = gateway_args(settings, client, &plan);
         realm.spawn(
@@ -587,6 +688,37 @@ mod tests {
         );
     }
 
+    /// L070: hosting binds the LAN or VPN address and opens the realm to new players, unless the
+    /// whitelist beside the account store names who may join; plain local play adds neither.
+    #[test]
+    fn hosting_opens_the_realm_on_the_lan_unless_a_whitelist_names_the_players() {
+        let dir = std::env::temp_dir().join(format!("osfr-host-{}", std::process::id()));
+        let mut s = LocalSettings::packaged(&dir);
+        let client = Path::new(r"C:\client");
+        let has = |args: &[String], flag: &str| args.iter().any(|arg| arg == flag);
+        for args in [
+            gateway_args(&s, client, &plan()),
+            login_args(&s, client, &plan()),
+        ] {
+            assert!(!has(&args, "--allow-lan") && !has(&args, "--open-enrollment"));
+        }
+        s.host = Some("192.168.1.5".parse().unwrap());
+        assert!(has(&gateway_args(&s, client, &plan()), "--allow-lan"));
+        let login = login_args(&s, client, &plan());
+        assert!(has(&login, "--allow-lan") && has(&login, "--open-enrollment"));
+        fs::create_dir_all(s.whitelist().parent().unwrap()).unwrap();
+        fs::write(s.whitelist(), "friend_a\n").unwrap();
+        let login = login_args(&s, client, &plan());
+        assert!(!has(&login, "--open-enrollment"));
+        let list = s.whitelist().display().to_string();
+        assert!(
+            login
+                .windows(2)
+                .any(|w| w == ["--enroll-handles", list.as_str()])
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn dev_tools_add_the_harness_flags() {
         let mut s = settings();
@@ -633,6 +765,7 @@ mod tests {
             login: "127.0.0.1:1".parse().unwrap(),
             broker: "127.0.0.1:1".parse().unwrap(),
             log_dir: PathBuf::new(),
+            identity: [0; 32],
         };
         drop(realm);
         assert_ne!(id, 0);

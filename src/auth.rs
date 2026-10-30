@@ -367,6 +367,40 @@ pub fn login(profile: &Profile) -> Result<SessionToken, AuthError> {
     if load_profile(&profile.id)? != *profile {
         return Err(AuthError::InvalidProfile);
     }
+    login_at(profile, address)
+}
+
+/// L070 hosting: this PC's own realm, at the address the launcher started it on (loopback, or
+/// the LAN/VPN address it hosts friends on) rather than the profile's saved broker. The saved
+/// profile still supplies the key, the handle and the identity pin; the address comes from the
+/// launcher's own `LocalRealm`, never from the network or a text field.
+pub fn login_local(profile_id: &str, broker: SocketAddr) -> Result<SessionToken, AuthError> {
+    let profile = load_profile(profile_id)?;
+    if !broker_ip_allowed(broker.ip()) {
+        return Err(AuthError::InvalidProfile);
+    }
+    login_at(&profile, broker)
+}
+
+/// L070 join by address: the identity a realm's broker answers with, shown (as its fingerprint)
+/// for the player to compare with the host's before a profile pins it. Trust on first use, by
+/// the player's choice; every later login refuses any other identity.
+pub fn fetch_identity(broker: &str) -> Result<[u8; 32], AuthError> {
+    let address: SocketAddr = broker
+        .trim()
+        .parse()
+        .map_err(|_| AuthError::InvalidProfile)?;
+    if !broker_ip_allowed(address.ip()) {
+        return Err(AuthError::InvalidProfile);
+    }
+    let mut request = b"AUTH2\x01".to_vec();
+    request.extend(10u32.to_le_bytes());
+    request.extend(b"join-check");
+    let reply = exchange(address, &request)?;
+    reply[1..33].try_into().map_err(|_| AuthError::InvalidReply)
+}
+
+fn login_at(profile: &Profile, address: SocketAddr) -> Result<SessionToken, AuthError> {
     let mut request = b"AUTH2\x01".to_vec();
     request.extend((profile.account_handle.len() as u32).to_le_bytes());
     request.extend(profile.account_handle.as_bytes());

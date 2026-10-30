@@ -256,12 +256,24 @@ fn start_local(
                 .public_key
             }
         };
-        osfr_launcher::local::enroll(local, &public_key).map_err(|e| e.to_string())?;
-        std::fs::write(&enrolled, b"").map_err(|e| e.to_string())?;
+        let id = osfr_launcher::local::enroll(local, &public_key).map_err(|e| e.to_string())?;
+        std::fs::write(&enrolled, id.to_string()).map_err(|e| e.to_string())?;
+    }
+    // L070: this PC's own account is the realm's admin, once. ponytail: a marker from before
+    // L070 holds no id; the launcher's enrollment made the store, so its account is id 1.
+    let admin = realm_dir.join("admin");
+    if !admin.is_file() {
+        let id = std::fs::read_to_string(&enrolled)
+            .ok()
+            .and_then(|id| id.trim().parse().ok())
+            .unwrap_or(1);
+        osfr_launcher::local::make_admin(local, id).map_err(|e| e.to_string())?;
+        std::fs::write(&admin, b"").map_err(|e| e.to_string())?;
     }
     let realm = LocalRealm::start(local, client, &realm_dir).map_err(|e| e.to_string())?;
     let mut login = RealmLogin {
         profile_id: LOCAL_PROFILE.into(),
+        broker: Some(realm.broker),
     };
     let plan = LaunchPlan::build(
         client,
@@ -348,6 +360,8 @@ fn next_profile_id(profiles: &[(String, String)]) -> String {
 
 struct RealmLogin {
     profile_id: String,
+    /// L070: this PC's own realm, logged in at the address the launcher started it on.
+    broker: Option<std::net::SocketAddr>,
 }
 
 impl RealmLogin {
@@ -367,14 +381,17 @@ impl RealmLogin {
 
 impl LoginProvider for RealmLogin {
     fn session(&mut self, endpoint: &str) -> osfr_launcher::Result<SessionToken> {
-        self.session_with(endpoint, auth::load_profile, auth::login)
+        match self.broker {
+            Some(broker) => auth::login_local(&self.profile_id, broker).map_err(auth_error_message),
+            None => self.session_with(endpoint, auth::load_profile, auth::login),
+        }
     }
 }
 
 pub(crate) fn auth_error_message(error: AuthError) -> String {
     match error {
         AuthError::Refused => {
-            "Login refused. If your key is not enrolled, send the public key from Settings and wait for the host to add it.".into()
+            "Login refused. Another player may hold that handle, or the realm only takes listed players: make a profile with another handle, or send the host your public key from Settings.".into()
         }
         _ => error.to_string(),
     }
@@ -533,6 +550,10 @@ pub(crate) struct Launcher {
     patch_attempt: Option<PatchSelection>,
     patch_ready: Option<PatchSelection>,
     patch_preview: bool,
+    /// L070: "Play locally" also hosts friends on `host_address` (this PC's LAN or VPN address).
+    host: bool,
+    host_choices: Vec<std::net::IpAddr>,
+    host_address: Option<std::net::IpAddr>,
 }
 
 impl Launcher {
@@ -598,6 +619,9 @@ impl Launcher {
             patch_attempt: None,
             patch_ready: None,
             patch_preview: false,
+            host: false,
+            host_choices: Vec::new(),
+            host_address: None,
         })
     }
 
@@ -626,7 +650,10 @@ impl Launcher {
         self.message = "Preparing client files and backups...".into();
         // One bounded preparation job; keep the window responsive during locale I/O.
         std::thread::spawn(move || {
-            let mut login: Box<dyn LoginProvider + Send> = Box::new(RealmLogin { profile_id });
+            let mut login: Box<dyn LoginProvider + Send> = Box::new(RealmLogin {
+                profile_id,
+                broker: None,
+            });
             let result = LaunchPlan::build(
                 &client,
                 &address,
@@ -661,10 +688,17 @@ impl Launcher {
                 "The local server is being checked or downloaded. Try again in a moment.".into();
             return;
         }
-        let local = LocalSettings::packaged(&root);
+        let mut local = LocalSettings::packaged(&root);
         if !local.missing().is_empty() {
             self.start_server_job(true);
             return;
+        }
+        if self.host {
+            let Some(address) = self.host_address else {
+                self.message = "No LAN or VPN address found to host on. Join a network (or start Tailscale) first.".into();
+                return;
+            };
+            local.host = Some(address);
         }
         if self.client.trim().is_empty() {
             self.settings_page = true;
@@ -1177,6 +1211,9 @@ impl Launcher {
                     self.play_locally();
                 }
             }
+            if self.launcher_dir.is_some() {
+                ui.vertical(|ui| self.host_ui(ui));
+            }
             ui.vertical(|ui| {
                 let id = &mut self.servers[self.selected].profile_id;
                 let label = profile_label(id, &self.profiles);
@@ -1195,11 +1232,65 @@ impl Launcher {
         });
     }
 
+    /// L070: "Play locally" hosts friends on this PC's LAN or VPN address. The realm is open (a
+    /// friend's first login makes their account) unless `server/state/whitelist.txt` lists handles.
+    fn host_ui(&mut self, ui: &mut egui::Ui) {
+        let idle = self.pending_local.is_none() && self.local.is_none();
+        let toggle = ui.add_enabled(
+            idle && self.screenshot.is_none(),
+            egui::Checkbox::new(&mut self.host, "Host for friends (LAN or VPN)"),
+        );
+        if toggle.changed() && self.host {
+            self.host_choices = osfr_launcher::local::host_addresses();
+            self.host_address = self.host_choices.first().copied();
+        }
+        if self.host && idle {
+            if self.host_choices.len() > 1 {
+                let shown = self
+                    .host_address
+                    .map(|ip| ip.to_string())
+                    .unwrap_or_default();
+                egui::ComboBox::from_id_salt("host-address")
+                    .selected_text(shown)
+                    .show_ui(ui, |ui| {
+                        for ip in &self.host_choices {
+                            ui.selectable_value(&mut self.host_address, Some(*ip), ip.to_string());
+                        }
+                    });
+            }
+            match self.host_address {
+                Some(ip) => ui.small(format!(
+                    "Friends join at {ip}:{}. Windows asks once to let the realm through its firewall: allow private networks.",
+                    osfr_launcher::local::LOGIN_PORT
+                )),
+                None => ui.small("No LAN or VPN address found. Join a network or start Tailscale."),
+            };
+        }
+        if let Some(realm) = &self.local {
+            if !realm.login.ip().is_loopback() {
+                ui.small(format!(
+                    "Hosting at {} (fingerprint {})",
+                    realm.login,
+                    short_fingerprint(&realm.identity)
+                ));
+                if ui.button("Copy join details").clicked() {
+                    let identity: String =
+                        realm.identity.iter().map(|b| format!("{b:02x}")).collect();
+                    ui.ctx().copy_text(format!(
+                        "Realm address: {}\nServer identity: {identity}",
+                        realm.login
+                    ));
+                    self.message = "Join details copied. Send them to your friends.".into();
+                }
+            }
+        }
+    }
+
     pub(crate) fn join_realm_ui(&mut self, ui: &mut egui::Ui, compact: bool) {
         ui.label(
             RichText::new("Join a realm").font(theme::display(if compact { 22.0 } else { 25.0 })),
         );
-        ui.small("Get the game address and 64-digit server identity from your host.");
+        ui.small("Get the realm address from your host, then ask the realm for its identity or paste the one they send.");
         let height = if compact { 34.0 } else { 40.0 };
         let address = theme::text_field(
             ui,
@@ -1237,6 +1328,22 @@ impl Launcher {
         if address.changed() || broker.changed() || identity.changed() {
             self.join_public_key = None;
         }
+        // L070 trust on first use: the player compares the fingerprint with the host's.
+        let ask = egui::Button::new("Ask the realm for its identity");
+        if ui.add_enabled(self.screenshot.is_none(), ask).clicked() {
+            // ponytail: one bounded exchange (2 s connect, 3 s reply) on the UI thread.
+            match auth::fetch_identity(&self.join_broker) {
+                Ok(identity) => {
+                    self.join_identity = identity.iter().map(|b| format!("{b:02x}")).collect();
+                    self.join_public_key = None;
+                    self.message = format!(
+                        "The realm answered with fingerprint {}. Check it matches the one your host sees.",
+                        short_fingerprint(&identity)
+                    );
+                }
+                Err(error) => self.message = auth_error_message(error),
+            }
+        }
         if let Some(identity) = parse_server_identity(&self.join_identity) {
             ui.small(format!(
                 "Short fingerprint to compare: {}",
@@ -1249,7 +1356,7 @@ impl Launcher {
             ui,
             &self.art,
             &mut self.join_handle,
-            "Account handle supplied by the host",
+            "Your account handle (3-32 letters, digits, _ or -)",
             Vec2::new(ui.available_width(), height),
             32,
         );
@@ -1293,7 +1400,7 @@ impl Launcher {
                     self.message = "Public key copied. Send it to your host for enrollment.".into();
                 }
             });
-            ui.small("Send this public key to your host so they can add it to your account.");
+            ui.small("An open realm makes your account on your first PLAY. If your host lists players, send them this key.");
             if self.join_preview {
                 ui.small("Example only: a real profile is saved on this PC and appears in PLAY.");
             } else {
@@ -2070,7 +2177,7 @@ mod tests {
             ),
             (
                 AuthError::Refused,
-                "Login refused. If your key is not enrolled, send the public key from Settings and wait for the host to add it.",
+                "Login refused. Another player may hold that handle, or the realm only takes listed players: make a profile with another handle, or send the host your public key from Settings.",
             ),
             (
                 AuthError::TryLater,
@@ -2102,6 +2209,7 @@ mod tests {
             let mut loaded = false;
             let login = RealmLogin {
                 profile_id: "fixture".into(),
+                broker: None,
             };
             let result = login.session_with(
                 "127.0.0.1:20042",
