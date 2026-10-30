@@ -804,6 +804,17 @@ impl Url {
 pub fn sha256(bytes: &[u8]) -> Result<String> {
     hash_reader(bytes, &AtomicBool::new(false))
 }
+
+/// OS MD5 as upper-case hex, the form a locale `.dir` header records (not a security check).
+pub fn md5_upper(bytes: &[u8]) -> Result<String> {
+    let mut hash = native::Hash::open("MD5")?;
+    for chunk in bytes.chunks(64 * 1024) {
+        hash.update(chunk)?;
+    }
+    let mut digest = [0; 16];
+    hash.finish_to(&mut digest)?;
+    Ok(digest.iter().map(|b| format!("{b:02X}")).collect())
+}
 fn hash_reader(mut reader: impl Read, cancel: &AtomicBool) -> Result<String> {
     let mut hash = native::Hash::new()?;
     let mut buffer = [0; 64 * 1024];
@@ -1079,6 +1090,10 @@ mod native {
     }
     impl Hash {
         pub fn new() -> Result<Self> {
+            Self::open("SHA256")
+        }
+        /// L073: the locale `.dir` header carries an MD5 of the `.dat`.
+        pub fn open(name: &str) -> Result<Self> {
             let mut value = Self {
                 hash: null_mut(),
                 algorithm: null_mut(),
@@ -1086,12 +1101,8 @@ mod native {
             // SAFETY: output handles are writable. Windows allocates the hash
             // object when its buffer is null (Windows 7+); Drop frees both.
             unsafe {
-                if BCryptOpenAlgorithmProvider(
-                    &mut value.algorithm,
-                    wide("SHA256").as_ptr(),
-                    null(),
-                    0,
-                ) < 0
+                if BCryptOpenAlgorithmProvider(&mut value.algorithm, wide(name).as_ptr(), null(), 0)
+                    < 0
                     || BCryptCreateHash(
                         value.algorithm,
                         &mut value.hash,
@@ -1102,7 +1113,7 @@ mod native {
                         0,
                     ) < 0
                 {
-                    return Err("Windows SHA-256 service unavailable.".into());
+                    return Err(format!("Windows {name} service unavailable.").into());
                 }
             }
             Ok(value)
@@ -1116,11 +1127,17 @@ mod native {
         }
         pub fn finish(&mut self) -> Result<[u8; 32]> {
             let mut digest = [0; 32];
-            // SAFETY: SHA256's output is exactly 32 bytes; hash is live.
-            if unsafe { BCryptFinishHash(self.hash, digest.as_mut_ptr(), 32, 0) } < 0 {
-                return Err("SHA-256 failed.".into());
-            }
+            self.finish_to(&mut digest)?;
             Ok(digest)
+        }
+        /// `digest` must be exactly the algorithm's output size (32 SHA256, 16 MD5).
+        pub fn finish_to(&mut self, digest: &mut [u8]) -> Result<()> {
+            // SAFETY: the caller sizes digest to the algorithm's output; hash is live.
+            let length = digest.len() as u32;
+            if unsafe { BCryptFinishHash(self.hash, digest.as_mut_ptr(), length, 0) } < 0 {
+                return Err("Hash failed.".into());
+            }
+            Ok(())
         }
     }
     impl Drop for Hash {

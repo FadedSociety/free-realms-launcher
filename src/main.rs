@@ -235,6 +235,16 @@ fn character_select_names(client: &Path) {
     }
 }
 
+/// L073: text the local server release shows that the stock locale lacks goes into the player's
+/// own locale. ponytail: a Settings locale overlay folder replaces these rows for that launch.
+fn client_text(client: &Path, content: &Path) {
+    match osfr_launcher::client_text::ensure_rows(client, &content.join("locale-additions.json")) {
+        Ok(0) => (),
+        Ok(added) => log::info!("added {added} text rows to the client locale"),
+        Err(error) => log::warn!("client text: {error}"),
+    }
+}
+
 /// T771: start the local servers, make and enroll this PC's local profile once (a marker file
 /// records the enrollment, so a failed one is retried), then prepare and launch the client
 /// against the local login port. The returned realm must live as long as the client.
@@ -250,6 +260,7 @@ fn start_local(
     // The stock creator tables fail osfr-login's pin; the overlay goes into the client copy first.
     osfr_launcher::local::ensure_creator_overlay(client).map_err(|e| e.to_string())?;
     character_select_names(client);
+    client_text(client, &local.content);
     // Enroll before the servers start: in account-store mode osfr-login refuses a missing store
     // and never creates one from network input. The profile keeps only the fixed local broker.
     let broker = format!("127.0.0.1:{}", osfr_launcher::local::BROKER_PORT);
@@ -675,12 +686,19 @@ impl Launcher {
         let address = server.address.clone();
         let profile_id = server.profile_id.trim().to_owned();
         let settings = self.settings;
+        let content = self
+            .launcher_dir
+            .as_deref()
+            .map(|root| LocalSettings::packaged(root).content);
         let (sender, receiver) = mpsc::channel();
         self.pending = Some(receiver);
         self.message = "Preparing client files and backups...".into();
         // One bounded preparation job; keep the window responsive during locale I/O.
         std::thread::spawn(move || {
             character_select_names(&client);
+            if let Some(content) = &content {
+                client_text(&client, content);
+            }
             let mut login: Box<dyn LoginProvider + Send> = Box::new(RealmLogin {
                 profile_id,
                 broker: None,

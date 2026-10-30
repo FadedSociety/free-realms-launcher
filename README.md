@@ -407,6 +407,17 @@ operand from `_id` to `_name` and writes the result to `custom/characterSelectV2
 (`src/character_select.rs`). No client file is shipped; an existing file there, or
 a different client's movie, is left alone.
 
+## Text the stock locale lacks
+
+Some server text has no row in the stock locale; the opening's reconstructed
+objective labels showed as `<STRING 0 NOT FOUND>` in the journal. The server
+release lists those rows (hash, tag, text) in `content/locale-additions.json`.
+Before each launch the launcher adds any missing row to the player's own
+`locale/en_us_data.dat` and `.dir` (`src/client_text.rs`), keeping both in hash
+order with the `.dir` header's `Count` and `MD5Checksum` updated: byte for byte
+what the community locale tool (FreeRealmsLocaleTools, MIT) writes. Existing rows
+are never changed.
+
 ## Licence
 
 GNU Affero General Public License v3 or later (`LICENSE`), like the Free Realms Expanded server, since 2026-10-29
