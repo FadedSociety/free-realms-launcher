@@ -295,6 +295,9 @@ pub fn gateway_args(settings: &LocalSettings, client: &Path, plan: &RunPlan) -> 
         "0".into(),
         "--resources".into(),
         path(&client.join("Resources")),
+        // L072: the referee panel names items from the player's own client text.
+        "--client-locale".into(),
+        path(&client.join("locale")),
         "--content".into(),
         path(&settings.content),
         "--identity".into(),
@@ -657,6 +660,7 @@ mod tests {
             .collect();
         assert!(pairs.contains(&("--seconds", "0")), "no time limit");
         assert!(pairs.contains(&("--resources", r"C:\client\Resources")));
+        assert!(pairs.contains(&("--client-locale", r"C:\client\locale")));
         assert!(pairs.contains(&("--handoff-key-file", r"C:\realm\handoff.key")));
         assert!(!gateway.contains(&"--dev-tools".to_owned()));
         let login = login_args(&s, client, &plan());
