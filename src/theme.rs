@@ -43,6 +43,7 @@ pub struct UiArt {
     text_field: egui::TextureHandle,
     pips: [egui::TextureHandle; 4],
     plank: egui::TextureHandle,
+    hero: egui::TextureHandle,
     icons: [egui::TextureHandle; 3],
     vines: Vec<GrowingVine>,
 }
@@ -105,6 +106,7 @@ impl UiArt {
                 texture!("pip_disabled.png"),
             ],
             plank: texture!("plank.png"),
+            hero: texture!("hero_cast.png"),
             icons: [
                 texture!("icon_leaf_green.png"),
                 texture!("icon_leaf_blue.png"),
@@ -145,6 +147,11 @@ impl UiArt {
         if let Some(texture) = self.icons.get(index) {
             painter.image(texture.id(), rect, unit_uv(), Color32::WHITE);
         }
+    }
+
+    /// The cast that stands over the play dock (redesign 2026-10-30).
+    pub fn hero(&self) -> &egui::TextureHandle {
+        &self.hero
     }
 
     pub fn pip(&self, painter: &egui::Painter, index: usize, rect: egui::Rect) {

@@ -1237,7 +1237,22 @@ impl Launcher {
         }
     }
 
+    /// Redesign 2026-10-30: wide windows put the realms on the left and the cast over the play
+    /// dock on the right; narrow ones (handhelds, small windows) stack them.
     fn home(&mut self, ui: &mut egui::Ui) {
+        let compact = ui.ctx().content_rect().height() < 650.0;
+        if !compact && ui.available_width() >= 820.0 {
+            ui.columns(2, |cols| {
+                self.home_realms(&mut cols[0]);
+                self.play_dock(&mut cols[1], compact, true);
+            });
+        } else {
+            self.home_realms(ui);
+            self.play_dock(ui, compact, false);
+        }
+    }
+
+    fn home_realms(&mut self, ui: &mut egui::Ui) {
         let compact = ui.ctx().content_rect().height() < 650.0;
         theme::heading(
             ui,
@@ -1320,8 +1335,29 @@ impl Launcher {
             }
         });
         self.patch_progress_ui(ui);
+    }
+
+    fn play_dock(&mut self, ui: &mut egui::Ui, compact: bool, wide: bool) {
+        if wide {
+            let [tw, th] = self.art.hero().size();
+            let width = ui.available_width();
+            let height = (width * th as f32 / tw as f32).min(240.0);
+            let (rect, _) = ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::hover());
+            let size = Vec2::new(height * tw as f32 / th as f32, height);
+            ui.painter().image(
+                self.art.hero().id(),
+                egui::Rect::from_center_size(rect.center(), size),
+                theme::unit_uv(),
+                Color32::WHITE,
+            );
+        }
         ui.add_space(if compact { 2.0 } else { 8.0 });
-        ui.horizontal(|ui| {
+        let layout = if wide {
+            egui::Layout::top_down(egui::Align::Center)
+        } else {
+            egui::Layout::left_to_right(egui::Align::Center)
+        };
+        ui.with_layout(layout, |ui| {
             let label = if self.child.is_some() {
                 "GAME RUNNING"
             } else if self.pending.is_some() {
@@ -1335,7 +1371,9 @@ impl Launcher {
                 ui,
                 &self.art,
                 label,
-                if compact {
+                if wide {
+                    Vec2::new(ui.available_width().min(420.0), 84.0)
+                } else if compact {
                     Vec2::new(208.0, 52.0)
                 } else {
                     Vec2::new(224.0, 64.0)
@@ -1766,6 +1804,18 @@ impl eframe::App for Launcher {
         {
             ctx.request_repaint_after(Duration::from_millis(33));
         }
+        // Redesign 2026-10-30: the whole UI scales with the window around the default 940x790
+        // (handhelds shrink to 0.8, a maximised widescreen grows to 1.5).
+        let fit = ctx.input(|i| {
+            let px = i.viewport().inner_rect?.size() * i.pixels_per_point();
+            Some(px / i.viewport().native_pixels_per_point?)
+        });
+        if let Some(size) = fit {
+            let zoom = (size.x / 940.0).min(size.y / 790.0).clamp(0.8, 1.5);
+            if (ctx.zoom_factor() - zoom).abs() > 0.02 {
+                ctx.set_zoom_factor(zoom);
+            }
+        }
         self.navigation(ctx);
         self.poll_patch();
         self.poll_server();
@@ -1849,7 +1899,9 @@ impl eframe::App for Launcher {
                         118.0
                     } else {
                         220.0
-                    });
+                    })
+                    // The wordmark never takes more than a fifth of the window (handhelds).
+                    .min(ctx.content_rect().height() * 0.2);
                     ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                         let [logo_w, logo_h] = self.banner.size();
                         let banner_rect = ui
@@ -1875,7 +1927,7 @@ impl eframe::App for Launcher {
                                 let realms = theme::button(
                                     ui,
                                     &self.art,
-                                    "Realms",
+                                    "Play",
                                     Vec2::new(132.0, if compact { 40.0 } else { 48.0 }),
                                     true,
                                     theme::ButtonSkin::Tab { selected: !rendered_settings },
