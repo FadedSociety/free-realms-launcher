@@ -552,6 +552,8 @@ pub(crate) struct Launcher {
     locale: String,
     settings: LaunchSettings,
     settings_page: bool,
+    /// Redesign 2026-10-30: the Host tab (hosting controls, setup check, HOST & PLAY).
+    host_page: bool,
     controller_on: bool,
     controller: Option<Controller>,
     controller_status: String,
@@ -630,6 +632,7 @@ impl Launcher {
             locale: String::new(),
             settings: LaunchSettings::default(),
             settings_page,
+            host_page: false,
             controller_on: true,
             controller,
             controller_status,
@@ -1412,9 +1415,6 @@ impl Launcher {
                     self.play_locally();
                 }
             }
-            if self.launcher_dir.is_some() {
-                ui.vertical(|ui| self.host_ui(ui));
-            }
             ui.vertical(|ui| {
                 let id = &mut self.servers[self.selected].profile_id;
                 let label = profile_label(id, &self.profiles);
@@ -1431,6 +1431,51 @@ impl Launcher {
                 ui.small("Saved key-pair profiles or loopback-only local login.");
             });
         });
+    }
+
+    /// Redesign 2026-10-30: the Host tab. Hosting controls, a setup check (ring dots) and HOST & PLAY.
+    fn host_page_ui(&mut self, ui: &mut egui::Ui) {
+        theme::heading(
+            ui,
+            "Host a realm",
+            "Run a realm on this PC for friends on your network or over the internet.",
+        );
+        let Some(root) = self.launcher_dir.clone() else {
+            return;
+        };
+        self.host_ui(ui);
+        ui.add_space(8.0);
+        let server_ok = LocalSettings::packaged(&root).missing().is_empty();
+        let client_ok = !self.client.trim().is_empty();
+        let ip_ok = !self.host_internet || self.host_public.trim().parse::<std::net::IpAddr>().is_ok();
+        for (ok, text) in [
+            (self.host, "Host for friends is ticked"),
+            (server_ok, "Server installed (the first Play locally downloads it)"),
+            (client_ok, "Client folder chosen (Settings)"),
+            (ip_ok, "Public IP entered (internet hosting)"),
+        ] {
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(Vec2::splat(22.0), egui::Sense::hover());
+                self.art.pip(ui.painter(), if ok { 0 } else { 2 }, rect);
+                ui.label(text);
+            });
+        }
+        ui.add_space(8.0);
+        let idle = self.pending.is_none()
+            && self.pending_local.is_none()
+            && self.child.is_none()
+            && self.server_job.is_none();
+        let go = theme::button(
+            ui,
+            &self.art,
+            "HOST & PLAY",
+            Vec2::new(ui.available_width().min(380.0), 76.0),
+            idle && self.host,
+            theme::ButtonSkin::Play,
+        );
+        if go.clicked() {
+            self.play_locally();
+        }
     }
 
     /// L070: "Play locally" hosts friends on this PC's LAN or VPN address. The realm is open (a
@@ -1877,6 +1922,7 @@ impl eframe::App for Launcher {
             }
         }
         let rendered_settings = self.settings_page;
+        let rendered_host = self.host_page && !rendered_settings;
         let rendered_realms = self.servers.len();
         self.focus_targets.clear();
         self.art.draw_backdrop(
@@ -1943,6 +1989,21 @@ impl eframe::App for Launcher {
                                 );
                                 if realms.clicked() {
                                     self.settings_page = false;
+                                    self.host_page = false;
+                                }
+                                // ponytail: the Host tab is touch/mouse only for now; controller focus walks
+                                // Play and Settings (add FocusTarget::HostTab with its focus_order tests).
+                                let host = theme::button(
+                                    ui,
+                                    &self.art,
+                                    "Host",
+                                    Vec2::new(120.0, if compact { 40.0 } else { 48.0 }),
+                                    self.launcher_dir.is_some(),
+                                    theme::ButtonSkin::Tab { selected: rendered_host },
+                                );
+                                if host.clicked() {
+                                    self.settings_page = false;
+                                    self.host_page = true;
                                 }
                                 let settings = theme::button(
                                     ui,
@@ -1963,11 +2024,14 @@ impl eframe::App for Launcher {
                                 );
                                 if settings.clicked() {
                                     self.settings_page = true;
+                                    self.host_page = false;
                                 }
                             });
                             ui.add_space(if compact { 1.0 } else { 5.0 });
                             if rendered_settings {
                                 self.settings_ui(ui);
+                            } else if rendered_host {
+                                self.host_page_ui(ui);
                             } else {
                                 self.home(ui);
                             }
@@ -1985,7 +2049,7 @@ impl eframe::App for Launcher {
                         theme::panel_shape(&self.art, panel.response.rect),
                     );
                     let actual: Vec<_> = self.focus_targets.iter().map(|(target, _)| *target).collect();
-                    debug_assert!(focus_sequence_matches(
+                    debug_assert!(rendered_host || focus_sequence_matches(
                         &actual,
                         rendered_settings,
                         rendered_realms,
