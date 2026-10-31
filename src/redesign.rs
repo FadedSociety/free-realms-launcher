@@ -34,7 +34,21 @@ impl Launcher {
             }))
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(&self.message).color(Color32::WHITE));
+                    let guide = theme::button(
+                        ui,
+                        &self.art,
+                        "Get started",
+                        Vec2::new(150.0, 44.0),
+                        true,
+                        theme::ButtonSkin::Standard,
+                    );
+                    if guide.clicked() {
+                        self.news_open = Some(guide_item());
+                    }
+                    // The intro line is what the guide explains; real news (errors, progress) still shows.
+                    if self.message != INTRO {
+                        ui.label(RichText::new(&self.message).color(Color32::WHITE));
+                    }
                     if self.directx_missing {
                         ui.hyperlink_to(
                             "Get the DirectX End-User Runtime",
@@ -294,11 +308,14 @@ impl Launcher {
                     egui::UiBuilder::new().max_rect(panel.shrink(PANEL_PAD)),
                     |ui| {
                         panel_title(ui, &short_title(&item.title));
-                        ui.vertical_centered(|ui| {
-                            ui.label(
-                                RichText::new(&item.date).color(Color32::from_rgb(222, 222, 250)),
-                            );
-                        });
+                        if !item.date.is_empty() {
+                            ui.vertical_centered(|ui| {
+                                ui.label(
+                                    RichText::new(&item.date)
+                                        .color(Color32::from_rgb(222, 222, 250)),
+                                );
+                            });
+                        }
                         ui.add_space(8.0);
                         let body_h = ui.available_height() - 52.0 - 12.0;
                         ui.scope(|ui| {
@@ -1014,3 +1031,38 @@ mod notes_tests {
         assert_eq!(plain("a [b] c"), "a [b] c");
     }
 }
+
+/// The Get started guide, shown in the notes window from the button in the status bar.
+pub(super) fn guide_item() -> osfr_launcher::release::NewsItem {
+    osfr_launcher::release::NewsItem {
+        title: "Getting started".into(),
+        headline: String::new(),
+        body: GUIDE.into(),
+        date: String::new(),
+        url: "https://github.com/FadedSociety/free-realms-launcher#readme".into(),
+    }
+}
+
+const GUIDE: &str = "\
+## 1. Your game client
+Free Realms Expanded runs on your own copy of the original Free Realms client (version 1.910.1.530630). Open **Settings** and choose the folder with FreeRealms.exe, or press **Download the client** to fetch it from the community host into a client folder beside the launcher.
+
+## 2. Play on this PC
+Press **Change** above PLAY NOW!, pick **Local realm** and press **PLAY NOW!**. The first time, the launcher downloads the server and checks every file before it starts. Your first login makes your account.
+
+## 3. Host a realm for friends
+Open the **Host** tab and pick who can join:
+- **Just me**: only this PC.
+- **Friends nearby**: friends on the same Wi-Fi or on Tailscale join at the address the Host tab shows.
+- **Internet**: forward UDP 20041 and 20042 and TCP 20041 and 20043 on your router to this PC, then enter your public IP (**Find it** looks it up). If your router's internet address differs from it or starts with 100.64 to 100.127, your provider shares one address between homes and forwarding will not work: use Tailscale instead.
+Press **HOST & PLAY** and allow the Windows firewall prompt for private networks. Then press **Copy join details** and send the realm address and server identity to your players. The realm runs while your game is open. To choose who can join, list their handles in server/state/whitelist.txt.
+
+## 4. Join a friend's realm
+Open **Settings** and fill in **Join a realm**: paste the realm address your host sent (the login broker fills itself in), then paste their server identity or press **Ask the realm for its identity** and check the fingerprint matches theirs. Pick an account handle and press **Create my key**: the key stays on this PC and no password is ever sent. Back on **Play**, press **Change**, choose their realm and press **PLAY NOW!**.
+
+## Controllers and handhelds
+The launcher scales to any window. A controller moves between the tabs, PLAY NOW! and the Settings fields; the Host tab is touch or mouse for now.
+
+## Need more help?
+Click any news card for its full release notes, or open the launcher's GitHub page for guides and bug reports.
+";

@@ -3,6 +3,9 @@
 mod controller;
 mod diagnostics;
 mod redesign;
+
+/// The status line a fresh launcher starts with; the Get started button stands in for it.
+pub(crate) const INTRO: &str = "Choose your client copy in Settings, then select a realm.";
 mod theme;
 
 use controller::{Controller, Navigation};
@@ -675,7 +678,7 @@ impl Launcher {
             launcher_dir: launcher_folder(),
             release: ReleaseSource::default(),
             server_job: None,
-            message: "Choose your client copy in Settings, then select a realm.".into(),
+            message: INTRO.into(),
             screenshot,
             screenshot_requested: false,
             capture_ok,
@@ -1393,7 +1396,7 @@ impl Launcher {
                 ui.small("Your profile is saved on this PC and appears in the PLAY login list.");
             }
         }
-        ui.small("Login goes to your host's broker on their LAN or VPN address; public addresses are refused.");
+        ui.small("Login goes to your host's broker at their realm address: on a LAN, a VPN or the internet.");
         ui.add_space(4.0);
         ui.separator();
     }
@@ -1739,6 +1742,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut patch_preview = false;
     let mut join_preview = false;
     let mut notes_preview = false;
+    let mut guide_preview = false;
     let mut window_size = [940.0, 790.0];
     let mut args = raw_args.into_iter();
     while let Some(arg) = args.next() {
@@ -1767,6 +1771,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             test_vine_growth = Some(millis as f32 / 1500.0);
         } else if arg == "--test-patch-progress" {
             patch_preview = true;
+        } else if arg == "--test-guide" {
+            guide_preview = true;
         } else if arg == "--test-notes" {
             notes_preview = true;
         } else if arg == "--test-join-flow" {
@@ -1839,6 +1845,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             launcher.patch_preview = patch_preview;
             launcher.host_page = host_page;
             launcher.notes_preview = notes_preview;
+            if guide_preview {
+                launcher.news_open = Some(redesign::guide_item());
+            }
             if let Some(folder) = &client {
                 launcher.client = folder.to_string_lossy().into_owned();
             }
