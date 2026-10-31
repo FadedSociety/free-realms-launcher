@@ -1295,16 +1295,6 @@ impl Launcher {
                 ),
             };
         }
-        if self.host {
-            ui.add_space(8.0);
-            ui.checkbox(
-                &mut self.test_realm,
-                RichText::new(
-                    "Test realm: new players can give themselves items, coins and Station Cash (no moderation)",
-                )
-                .color(Color32::WHITE),
-            );
-        }
     }
 
     fn host_check(&mut self, ui: &mut egui::Ui) {
@@ -1446,6 +1436,20 @@ impl Launcher {
                 }
             }
         });
+        if self.host {
+            ui.add_space(24.0);
+            panel_title(ui, "Realm options");
+            ui.add_space(8.0);
+            // A fixed break keeps the label inside the panel's rim at every window size.
+            ui.checkbox(
+                &mut self.test_realm,
+                RichText::new(
+                    "Test realm: new players can give themselves
+items, coins and Station Cash (no moderation)",
+                )
+                .color(Color32::WHITE),
+            );
+        }
     }
 }
 
