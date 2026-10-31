@@ -258,7 +258,7 @@ fn start_local(
     client: &Path,
     locale: Option<&Path>,
     settings: LaunchSettings,
-) -> Result<(Child, Responder, LocalRealm), String> {
+) -> Result<(Child, Option<Responder>, LocalRealm), String> {
     let realm_dir = auth::ensure_profile_directory(LOCAL_PROFILE)
         .map_err(auth_error_message)?
         .join("realm");
@@ -584,12 +584,12 @@ pub(crate) struct Launcher {
     controller_on: bool,
     controller: Option<Controller>,
     controller_status: String,
-    pending: Option<mpsc::Receiver<Result<(Child, Responder), String>>>,
+    pending: Option<mpsc::Receiver<Result<(Child, Option<Responder>), String>>>,
     /// The asset responder lives exactly as long as the client it serves.
-    child: Option<(Child, Responder)>,
+    child: Option<(Child, Option<Responder>)>,
     /// T771: the servers "Play locally" started; dropping it stops them when the client closes.
     local: Option<LocalRealm>,
-    pending_local: Option<mpsc::Receiver<Result<(Child, Responder, LocalRealm), String>>>,
+    pending_local: Option<mpsc::Receiver<Result<(Child, Option<Responder>, LocalRealm), String>>>,
     /// The folder holding `server/` (the launcher's own), and where its releases come from.
     launcher_dir: Option<PathBuf>,
     release: ReleaseSource,

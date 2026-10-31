@@ -454,7 +454,8 @@ pub struct LaunchPlan {
     changes: Vec<Change>,
     arguments: Vec<String>,
     backup: PathBuf,
-    assets: assets::Responder,
+    /// None for the community host's client, which reads its assets locally.
+    assets: Option<assets::Responder>,
 }
 
 impl LaunchPlan {
@@ -482,16 +483,25 @@ impl LaunchPlan {
         for name in LOCALE {
             regular(&root, &format!("locale/{name}"))?;
         }
-        let assets = assets::Responder::start(&root)?;
-        let baseline = replace_setting(
-            &offline_urls(&replace_setting(
-                &text(&root, "ClientConfig.ini")?,
-                "Server",
-                endpoint,
-            )?),
-            "IndirectServerAddress",
-            &assets.url,
-        )?;
+        // The original install streams assets from an asset server, so the launcher serves them
+        // locally (and needs Assets_manifest.txt). The community host's client reads its assets from
+        // its own folder (IndirectServerAddress=file://./manifest), so that setting stays as it is.
+        let config = text(&root, "ClientConfig.ini")?;
+        let local_assets = config.lines().any(|line| {
+            line.trim()
+                .to_ascii_lowercase()
+                .starts_with("indirectserveraddress=file://")
+        });
+        let assets = if local_assets {
+            None
+        } else {
+            Some(assets::Responder::start(&root)?)
+        };
+        let config = offline_urls(&replace_setting(&config, "Server", endpoint)?);
+        let baseline = match &assets {
+            Some(assets) => replace_setting(&config, "IndirectServerAddress", &assets.url)?,
+            None => config,
+        };
         let mut options = text_or(&root, "UserOptions.ini", DEFAULT_OPTIONS)?;
         for (key, value) in [
             ("WindowedWidth", settings.width.to_string()),
@@ -658,7 +668,7 @@ impl LaunchPlan {
 
     /// Explicitly called only from Play. Tests and screenshot mode never call it.
     /// Keep the returned responder as long as the client runs: it serves its assets.
-    pub fn launch(self) -> Result<(Child, assets::Responder)> {
+    pub fn launch(self) -> Result<(Child, Option<assets::Responder>)> {
         #[cfg(not(windows))]
         {
             Err("Launching Free Realms requires Windows.".into())

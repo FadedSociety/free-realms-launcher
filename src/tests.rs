@@ -400,7 +400,7 @@ fn responder_refuses_requests_outside_the_asset_folder() {
         &mut LocalLoginStub,
     )
     .unwrap();
-    let url = plan.assets.url.clone();
+    let url = plan.assets.as_ref().unwrap().url.clone();
     let absolute = scratch.0.join("secret.z").display().to_string();
     let forward = absolute.replace('\\', "/");
     let targets = [
@@ -485,7 +485,7 @@ fn junction_asset_folder_is_refused() {
         &mut LocalLoginStub,
     )
     .unwrap();
-    let response = get(&plan.assets.url, "/1/secret.z");
+    let response = get(&plan.assets.as_ref().unwrap().url, "/1/secret.z");
     fs::remove_dir(scratch.0.join("indirect-assets")).unwrap();
     // The file is regular, but it resolves outside the folder.
     assert_eq!(response, ("HTTP/1.0 404 Not Found".to_owned(), Vec::new()));
@@ -502,7 +502,7 @@ fn trickled_request_cannot_hold_a_slot() {
         &mut LocalLoginStub,
     )
     .unwrap();
-    let address = plan.assets.url.strip_prefix("http://").unwrap();
+    let address = plan.assets.as_ref().unwrap().url.strip_prefix("http://").unwrap();
     let mut stream = TcpStream::connect(address.trim_end_matches('/')).unwrap();
     // Waiting for the reply paces the sender: one byte per 400 ms never trips
     // a per-read timeout, and the head never ends, so only a deadline closes it.
@@ -539,7 +539,7 @@ fn responder_closes_connections_past_its_cap() {
         &mut LocalLoginStub,
     )
     .unwrap();
-    let url = plan.assets.url.clone();
+    let url = plan.assets.as_ref().unwrap().url.clone();
     let address = url.strip_prefix("http://").unwrap().trim_end_matches('/');
     let reply = || {
         let mut stream = TcpStream::connect(address).unwrap();
@@ -642,4 +642,48 @@ fn a_client_without_options_or_batch_still_prepares() {
     let options = fs::read_to_string(scratch.0.join("UserOptions.ini")).unwrap();
     assert!(options.contains("WindowedWidth=1280\nWindowedHeight=720"));
     assert!(options.contains("Mode=Windowed\nMaximized=0"));
+}
+
+#[test]
+fn a_community_client_keeps_its_local_assets() {
+    // The community host's client: no Assets_manifest.txt, assets read from its own folder.
+    let scratch = Scratch::new();
+    fs::remove_file(scratch.0.join("Assets_manifest.txt")).unwrap();
+    fs::write(
+        scratch.0.join("ClientConfig.ini"),
+        "Server=old:20042\nIndirectServerAddress=file://./manifest\nAddress=lvsadp-old\n",
+    )
+    .unwrap();
+    let plan = LaunchPlan::build(
+        &scratch.0,
+        "127.0.0.1:20042",
+        None,
+        LaunchSettings {
+            width: 1280,
+            height: 720,
+        },
+        &mut LocalLoginStub,
+    )
+    .unwrap();
+    assert!(plan.assets.is_none(), "no responder for a client that reads assets locally");
+    plan.apply().unwrap();
+    let baseline = fs::read_to_string(scratch.0.join("Baseline.ini")).unwrap();
+    assert!(baseline.contains("IndirectServerAddress=file://./manifest"));
+    assert!(baseline.contains("Server=127.0.0.1:20042"));
+}
+
+/// A real client folder prepares as a dry run (nothing is written): `OSFR_CLIENT=<folder>`.
+#[test]
+#[ignore = "needs OSFR_CLIENT"]
+fn a_real_client_folder_prepares() {
+    let client = PathBuf::from(std::env::var_os("OSFR_CLIENT").expect("OSFR_CLIENT"));
+    let plan = LaunchPlan::build(
+        &client,
+        "127.0.0.1:20042",
+        None,
+        LaunchSettings::default(),
+        &mut LocalLoginStub,
+    )
+    .unwrap();
+    assert!(plan.changed_files().any(|f| f == "Baseline.ini"));
 }
