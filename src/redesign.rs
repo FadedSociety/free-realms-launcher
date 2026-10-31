@@ -529,15 +529,27 @@ impl Launcher {
             }
         }
         let address = self.join_address.trim().to_owned();
-        self.servers
-            .retain(|s| !(s.profile_id.is_empty() && s.address == address));
-        self.selected = self.selected.min(self.servers.len().saturating_sub(1));
-        self.join_public_key = None;
-        self.create_join_profile();
-        if self.join_public_key.is_none() {
-            return false;
+        let identity = parse_server_identity(&self.join_identity);
+        let known = self.servers.iter().position(|s| {
+            !s.profile_id.is_empty()
+                && s.address == address
+                && auth::load_profile(&s.profile_id)
+                    .is_ok_and(|p| Some(p.server_identity) == identity)
+        });
+        if let Some(index) = known {
+            self.selected = index;
+        } else {
+            self.servers
+                .retain(|s| !(s.profile_id.is_empty() && s.address == address));
+            self.selected = self.selected.min(self.servers.len().saturating_sub(1));
+            self.join_public_key = None;
+            self.create_join_profile();
+            if self.join_public_key.is_none() {
+                return false;
+            }
         }
-        self.message = "Joined. Press PLAY NOW! Your first login makes your account there.".into();
+        // v0.3.4: Join goes straight in; the first login makes the account there.
+        self.play();
         true
     }
 
