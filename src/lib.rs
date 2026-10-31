@@ -193,7 +193,10 @@ fn no_link(path: &Path) -> Result<fs::Metadata> {
         linked || metadata.file_attributes() & 0x400 != 0 // FILE_ATTRIBUTE_REPARSE_POINT, includes junctions.
     };
     if linked {
-        return Err("Symlinks and reparse points are not allowed inside the client folder.".into());
+        return Err(
+            "Symlinks and junctions are not allowed in the client or server folders. Put the launcher and your client in ordinary folders."
+                .into(),
+        );
     }
     Ok(metadata)
 }

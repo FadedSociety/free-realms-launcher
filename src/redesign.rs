@@ -816,7 +816,10 @@ impl Launcher {
             .launcher_dir
             .as_ref()
             .is_some_and(|root| LocalSettings::packaged(root).missing().is_empty());
-        let ip_ok = self.host_public.trim().parse::<std::net::IpAddr>().is_ok();
+        let ip = self.host_public.trim().to_owned();
+        let ip_ok = ip.parse::<std::net::IpAddr>().is_ok();
+        let client_ok = !self.client.trim().is_empty();
+        // Each row: passed, what it checks, and what it found (or what to do).
         let rows = [
             (
                 server_ok,
@@ -825,29 +828,36 @@ impl Launcher {
                     "ready"
                 } else {
                     "first play downloads it"
-                },
+                }
+                .to_owned(),
             ),
             (
-                !self.client.trim().is_empty(),
+                client_ok,
                 "Client folder chosen",
-                "Settings",
+                if client_ok {
+                    "ready"
+                } else {
+                    "choose it in Settings"
+                }
+                .to_owned(),
             ),
             (
                 self.host,
                 "Hosting chosen",
-                if self.host_internet {
-                    "Internet"
-                } else {
-                    "Friends nearby"
-                },
+                match (self.host, self.host_internet) {
+                    (false, _) => "pick Friends nearby or Internet",
+                    (true, true) => "Internet",
+                    (true, false) => "Friends nearby",
+                }
+                .to_owned(),
             ),
             (
                 !self.host_internet || ip_ok,
                 "Public IP entered",
-                if self.host_internet {
-                    "needed"
-                } else {
-                    "not needed"
+                match (self.host_internet, ip_ok) {
+                    (false, _) => "not needed".to_owned(),
+                    (true, true) => ip,
+                    (true, false) => "needed".to_owned(),
                 },
             ),
         ];
@@ -855,14 +865,23 @@ impl Launcher {
             let (row, _) =
                 ui.allocate_exact_size(Vec2::new(ui.available_width(), 44.0), egui::Sense::hover());
             self.art.piece(ui.painter(), Piece::Card, row);
+            let dot = egui::pos2(row.left() + 24.0, row.center().y);
             self.art.pip(
                 ui.painter(),
                 if ok { 0 } else { 1 },
-                egui::Rect::from_center_size(
-                    egui::pos2(row.left() + 24.0, row.center().y),
-                    Vec2::splat(18.0),
-                ),
+                egui::Rect::from_center_size(dot, Vec2::splat(18.0)),
             );
+            if ok {
+                // A tick in the green ring: passed checks read at a glance.
+                ui.painter().line(
+                    vec![
+                        dot + Vec2::new(-4.5, 0.0),
+                        dot + Vec2::new(-1.0, 3.5),
+                        dot + Vec2::new(5.0, -4.0),
+                    ],
+                    egui::Stroke::new(2.5_f32, Color32::from_rgb(0, 120, 60)),
+                );
+            }
             ui.painter().text(
                 egui::pos2(row.left() + 42.0, row.center().y),
                 egui::Align2::LEFT_CENTER,
