@@ -62,7 +62,7 @@ fn flip_title(movie: &[u8]) -> Option<Vec<u8>> {
 
 /// A file from the client's `Assets_*.pack` chain: big-endian chunks of (next chunk, count), then
 /// per entry name length, name, offset, length, crc.
-fn pack_entry(client: &Path, wanted: &str) -> io::Result<Option<Vec<u8>>> {
+pub(crate) fn pack_entry(client: &Path, wanted: &str) -> io::Result<Option<Vec<u8>>> {
     let mut packs: Vec<_> = fs::read_dir(client)?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| {

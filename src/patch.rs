@@ -355,6 +355,15 @@ pub(crate) fn fetch_bytes(url: &Url, limit: u64, cancel: &AtomicBool) -> Result<
     read_manifest(&mut response, limit, cancel)
 }
 
+/// The asset Responder's pass-through: one GET whose body is streamed; 200 with a length only.
+pub(crate) fn open(url: &Url) -> Result<(u64, impl Read + use<>)> {
+    let response = fetch(url, 0)?;
+    match (response.status, response.length) {
+        (200, Some(length)) => Ok((length, response)),
+        (status, _) => Err(format!("The asset host answered HTTP {status}.")),
+    }
+}
+
 /// One GET. Only release URLs follow redirects (at most three, each re-validated);
 /// every other URL gets the raw response and a 3xx is refused by the caller.
 fn fetch(url: &Url, offset: u64) -> Result<native::Response> {

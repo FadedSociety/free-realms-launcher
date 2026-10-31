@@ -49,6 +49,13 @@ impl Drop for Slot {
 
 impl Responder {
     pub fn start(root: &Path) -> Result<Self> {
+        Self::start_with_upstream(root, None)
+    }
+
+    /// GM tools: assets missing from `indirect-assets/` come from `upstream` (the community host
+    /// a streaming client would otherwise ask directly), byte for byte.
+    pub fn start_with_upstream(root: &Path, upstream: Option<&str>) -> Result<Self> {
+        let upstream: Option<Arc<str>> = upstream.map(|u| u.trim_end_matches('/').into());
         let manifest = bounded_read(&regular(root, "Assets_manifest.txt")?, LIMIT)?;
         // 0x010a1980 splits the body at ','; OnManifestCrcReceived 0x0109bd00 then
         // keeps its local `%s_manifest.txt` when its CRC (0x00704a40) matches, so the
@@ -80,10 +87,11 @@ impl Responder {
                     // an idle client connection never holds up another.
                     active.fetch_add(1, Ordering::SeqCst);
                     let (folder, crc, slot) = (folder.clone(), crc.clone(), Slot(active.clone()));
+                    let upstream = upstream.clone();
                     // Builder, not spawn: a failed thread start must not end this loop.
                     let _ = std::thread::Builder::new().spawn(move || {
                         let _slot = slot;
-                        let _ = serve(&stream, &folder, &crc);
+                        let _ = serve(&stream, &folder, &crc, upstream.as_deref());
                     });
                 }
             }
@@ -103,7 +111,12 @@ impl Drop for Responder {
     }
 }
 
-fn serve(mut stream: &TcpStream, folder: &Path, crc: &[u8]) -> io::Result<()> {
+fn serve(
+    mut stream: &TcpStream,
+    folder: &Path,
+    crc: &[u8],
+    upstream: Option<&str>,
+) -> io::Result<()> {
     let start = Instant::now();
     stream.set_write_timeout(Some(Duration::from_secs(30)))?;
     // Read the whole head (GetRequest 0x00d31140 ends it `Host: %s\r\n\r\n`):
@@ -127,10 +140,13 @@ fn serve(mut stream: &TcpStream, folder: &Path, crc: &[u8]) -> io::Result<()> {
     let line = std::str::from_utf8(line.trim_ascii()).unwrap_or("");
     // GetRequest sends `GET <path> HTTP/1.1` with the path copied unescaped
     // (URL split 0x00d30100), so a manifest name may carry spaces.
-    let found = line
+    let target = line
         .strip_prefix("GET ")
         .and_then(|rest| rest.rsplit_once(' '))
-        .and_then(|(target, _)| body(target, folder, crc));
+        .map(|(target, _)| target);
+    let found = target
+        .and_then(|target| body(target, folder, crc))
+        .or_else(|| upstream.zip(target).and_then(|(up, target)| from_upstream(up, target)));
     let status = if found.is_some() {
         "200 OK"
     } else {
@@ -173,6 +189,24 @@ fn body<'a>(target: &str, folder: &Path, crc: &'a [u8]) -> Option<(u64, Box<dyn 
     // `take` keeps the body to the advertised length if the file grows meanwhile.
     let length = file.metadata().ok()?.len();
     Some((length, Box::new(file.take(length))))
+}
+
+/// A pass-through asset: only `/<bucket>/<asset name>?<crc>` shapes go upstream, and only a 200 with
+/// a length is relayed (anything else answers 404 as a missing local file does).
+fn from_upstream(upstream: &str, target: &str) -> Option<(u64, Box<dyn Read>)> {
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let (bucket, name) = path.strip_prefix('/')?.split_once('/')?;
+    if bucket.is_empty()
+        || !bucket.bytes().all(|b| b.is_ascii_digit())
+        || name.contains('/')
+        || !valid_path(name)
+        || !query.bytes().all(|b| b.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+    let url = crate::patch::Url::parse(&format!("{upstream}{}", target.replace(' ', "%20"))).ok()?;
+    let (length, response) = crate::patch::open(&url).ok()?;
+    Some((length, Box::new(response.take(length))))
 }
 
 /// Standard CRC-32, the harness's `zlib.crc32`.

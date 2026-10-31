@@ -1506,6 +1506,28 @@ impl Launcher {
                 ui.small("From the community host into client/ beside the launcher. It resumes and checks every file.");
             });
         }
+        // GM tools (owner 2026-10-31): the in-game GM panel and the GM Tools / Redeem Code hub trees,
+        // built from this client's own UI movies.
+        if client_folder_ok(&self.client) {
+            let folder = PathBuf::from(self.client.trim());
+            let installed = osfr_launcher::gm_tools::installed(&folder);
+            ui.horizontal(|ui| {
+                let idle = self.screenshot.is_none() && self.child.is_none();
+                let label = if installed { "Remove GM tools" } else { "Install GM tools" };
+                if ui.add_enabled(idle, egui::Button::new(label)).clicked() {
+                    self.message = match if installed {
+                        osfr_launcher::gm_tools::remove(&folder)
+                    } else {
+                        osfr_launcher::gm_tools::install(&folder)
+                    } {
+                        Ok(()) if installed => "GM tools removed from this client.".into(),
+                        Ok(()) => "GM tools installed: the GM Tools and Redeem Code trees are on the hub in game.".into(),
+                        Err(error) => error,
+                    };
+                }
+                ui.small("The in-game GM panel (for admins and testers) and the Redeem Code tree.");
+            });
+        }
         let locale = theme::text_field(
             ui,
             &self.art,

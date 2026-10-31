@@ -5,6 +5,7 @@ pub mod auth;
 pub mod character_select;
 pub mod client_text;
 pub mod directory;
+pub mod gm_tools;
 pub mod local;
 pub mod patch;
 pub mod release;
@@ -498,7 +499,12 @@ impl LaunchPlan {
                 .to_ascii_lowercase()
                 .starts_with("indirectserveraddress=file://")
         });
-        let assets = if local_assets {
+        // GM tools add rows to the client's own manifest, so the client must get that manifest's crc:
+        // it goes through the Responder, which fetches everything it does not hold from the
+        // community host.
+        let assets = if local_assets && gm_tools::installed(&root) {
+            Some(assets::Responder::start_with_upstream(&root, Some(COMMUNITY_ASSETS_URL))?)
+        } else if local_assets {
             None
         } else {
             Some(assets::Responder::start(&root)?)
