@@ -126,7 +126,8 @@ fn key_round_trip_location_permissions_and_cli() {
     for id in ["..", "C:escape", "CON", "test.", "a/b", "a\\b"] {
         assert!(auth::profile_directory(id).is_err());
     }
-    assert!(Profile::new("ok", "Test", "192.0.2.1:1", [1; 32], "acct_001").is_err());
+    // L075 opened public brokers; wildcard, multicast and link-local stay refused.
+    assert!(Profile::new("ok", "Test", "0.0.0.0:1", [1; 32], "acct_001").is_err());
     assert!(Profile::new("ok", "Test", "localhost:1", [1; 32], "acct_001").is_err());
 }
 

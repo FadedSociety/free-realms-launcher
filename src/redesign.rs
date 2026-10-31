@@ -213,11 +213,11 @@ impl Launcher {
     }
 
     /// v0.3.2: the choices players expect back next time, in `%APPDATA%/FreeRealmsExpanded/launcher.json`.
+    /// v0.3.4: through auth, so the folder is made private (and repaired) before launcher.json.
     fn prefs_path() -> Option<std::path::PathBuf> {
-        let appdata = std::path::PathBuf::from(std::env::var_os("APPDATA")?);
-        appdata
-            .is_absolute()
-            .then(|| appdata.join("FreeRealmsExpanded").join("launcher.json"))
+        auth::ensure_app_directory()
+            .ok()
+            .map(|app| app.join("launcher.json"))
     }
 
     fn prefs_json(&self) -> String {
@@ -295,11 +295,7 @@ impl Launcher {
         self.prefs_saved = json.clone();
         if let Some(path) = Self::prefs_path() {
             let temporary = path.with_extension("json.tmp");
-            let _ = path
-                .parent()
-                .map(std::fs::create_dir_all)
-                .unwrap_or(Ok(()))
-                .and_then(|()| std::fs::write(&temporary, json))
+            let _ = std::fs::write(&temporary, json)
                 .and_then(|()| std::fs::rename(&temporary, &path));
         }
     }

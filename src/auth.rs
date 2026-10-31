@@ -145,11 +145,92 @@ fn valid_id(id: &str) -> Result<(), AuthError> {
 /// This performs no writes and rejects relative/missing APPDATA (no cwd fallback).
 pub fn profile_directory(id: &str) -> Result<PathBuf, AuthError> {
     valid_id(id)?;
+    Ok(app_root()?.join("profiles").join(id))
+}
+
+fn app_root() -> Result<PathBuf, AuthError> {
     let appdata = PathBuf::from(std::env::var_os("APPDATA").ok_or(AuthError::KeyStorage)?);
     if !appdata.is_absolute() {
         return Err(AuthError::KeyStorage);
     }
-    Ok(appdata.join("FreeRealmsExpanded").join("profiles").join(id))
+    Ok(appdata.join("FreeRealmsExpanded"))
+}
+
+/// The launcher's own folder (launcher.json and the profiles), created private and checked.
+/// v0.3.4: launchers v0.3.2-v0.3.3 made it with ordinary permissions when they saved launcher.json
+/// before any profile existed; a folder holding only that file is remade private.
+pub fn ensure_app_directory() -> Result<PathBuf, AuthError> {
+    let app = app_root()?;
+    // Reject junctions/symlinks in every existing ancestor before creating files.
+    for ancestor in app.ancestors() {
+        match fs::symlink_metadata(ancestor) {
+            Ok(_) => {
+                if !crate::no_link(ancestor)
+                    .map_err(|_| AuthError::KeyStorage)?
+                    .is_dir()
+                {
+                    return Err(AuthError::KeyStorage);
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+            Err(_) => return Err(AuthError::KeyStorage),
+        }
+    }
+    if private_directory(&app).is_err() {
+        remake_prefs_only_folder(&app)?;
+        private_directory(&app)?;
+    }
+    Ok(app)
+}
+
+fn private_directory(path: &Path) -> Result<(), AuthError> {
+    match create_directory(path) {
+        Ok(()) => (),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),
+        Err(_) => return Err(AuthError::KeyStorage),
+    }
+    if !crate::no_link(path)
+        .map_err(|_| AuthError::KeyStorage)?
+        .is_dir()
+    {
+        return Err(AuthError::KeyStorage);
+    }
+    private_permissions(path, true)
+}
+
+/// Only launcher.json (and its .tmp) may be inside: anything else, or a link, refuses as before.
+fn remake_prefs_only_folder(app: &Path) -> Result<(), AuthError> {
+    let mut prefs = None;
+    for entry in fs::read_dir(app).map_err(|_| AuthError::KeyStorage)? {
+        let entry = entry.map_err(|_| AuthError::KeyStorage)?;
+        let file = entry
+            .file_type()
+            .map_err(|_| AuthError::KeyStorage)?
+            .is_file();
+        match entry.file_name().to_str() {
+            Some("launcher.json") if file => {
+                prefs = Some(
+                    crate::bounded_read(&entry.path(), 64 * 1024)
+                        .map_err(|_| AuthError::KeyStorage)?,
+                )
+            }
+            Some("launcher.json.tmp") if file => (),
+            _ => return Err(AuthError::KeyStorage),
+        }
+    }
+    for name in ["launcher.json", "launcher.json.tmp"] {
+        match fs::remove_file(app.join(name)) {
+            Ok(()) => (),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+            Err(_) => return Err(AuthError::KeyStorage),
+        }
+    }
+    fs::remove_dir(app).map_err(|_| AuthError::KeyStorage)?;
+    create_directory(app).map_err(|_| AuthError::KeyStorage)?;
+    if let Some(bytes) = prefs {
+        let _ = fs::write(app.join("launcher.json"), bytes);
+    }
+    Ok(())
 }
 
 fn regular_private(path: &Path) -> Result<(), AuthError> {
@@ -171,37 +252,12 @@ pub fn ensure_profile_directory(id: &str) -> Result<PathBuf, AuthError> {
 
 fn directory(id: &str) -> Result<PathBuf, AuthError> {
     let directory = profile_directory(id)?;
-    // Reject junctions/symlinks in every existing ancestor before creating files.
-    for ancestor in directory.ancestors() {
-        match fs::symlink_metadata(ancestor) {
-            Ok(_) => {
-                if !crate::no_link(ancestor)
-                    .map_err(|_| AuthError::KeyStorage)?
-                    .is_dir()
-                {
-                    return Err(AuthError::KeyStorage);
-                }
-            }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => (),
-            Err(_) => return Err(AuthError::KeyStorage),
-        }
-    }
-    // APPDATA itself must exist; create only this application's directories.
+    // APPDATA itself must exist; create only this application's directories. Each is checked for
+    // links and private permissions before anything is written into it.
+    ensure_app_directory()?;
     let profiles = directory.parent().ok_or(AuthError::KeyStorage)?;
-    let app = profiles.parent().ok_or(AuthError::KeyStorage)?;
-    for path in [app, profiles, directory.as_path()] {
-        match create_directory(path) {
-            Ok(()) => (),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),
-            Err(_) => return Err(AuthError::KeyStorage),
-        }
-        if !crate::no_link(path)
-            .map_err(|_| AuthError::KeyStorage)?
-            .is_dir()
-        {
-            return Err(AuthError::KeyStorage);
-        }
-        private_permissions(path, true)?;
+    for path in [profiles, directory.as_path()] {
+        private_directory(path)?;
     }
     Ok(directory)
 }
@@ -686,3 +742,37 @@ fn create_file(_: &Path) -> Result<File, AuthError> {
 #[cfg(test)]
 #[path = "../tests/support/auth_wire.rs"]
 mod wire_tests;
+
+#[cfg(all(test, windows))]
+mod app_folder_tests {
+    use super::*;
+
+    #[test]
+    fn a_folder_holding_only_launcher_json_is_remade_private_and_keeps_the_file() {
+        let app = std::env::temp_dir().join(format!("osfr-app-folder-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&app);
+        fs::create_dir(&app).unwrap();
+        fs::write(app.join("launcher.json"), b"{\"host\":true}").unwrap();
+        assert!(
+            private_directory(&app).is_err(),
+            "an ordinary folder is not private"
+        );
+        remake_prefs_only_folder(&app).unwrap();
+        private_directory(&app).unwrap();
+        assert_eq!(
+            fs::read(app.join("launcher.json")).unwrap(),
+            b"{\"host\":true}"
+        );
+
+        // Anything else inside refuses and leaves the folder alone.
+        let other = app.with_extension("other");
+        let _ = fs::remove_dir_all(&other);
+        fs::create_dir(&other).unwrap();
+        fs::write(other.join("launcher.json"), b"{}").unwrap();
+        fs::write(other.join("key.ed25519"), b"x").unwrap();
+        assert!(remake_prefs_only_folder(&other).is_err());
+        assert!(other.join("key.ed25519").is_file() && other.join("launcher.json").is_file());
+        fs::remove_dir_all(&app).unwrap();
+        fs::remove_dir_all(&other).unwrap();
+    }
+}
