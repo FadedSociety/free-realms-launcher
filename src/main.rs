@@ -559,6 +559,10 @@ pub(crate) struct Launcher {
     host_page: bool,
     /// v0.3.1: the realm chooser over the hero scene (Change).
     realm_popup: bool,
+    /// v0.3.1: the release whose full notes show over the launcher.
+    news_open: Option<osfr_launcher::release::NewsItem>,
+    /// Test aid: open the newest release's notes when the news arrives.
+    notes_preview: bool,
     /// The client folder the fonts were last chosen for, and whether the game's font is in use.
     font_client: String,
     game_font: bool,
@@ -645,6 +649,8 @@ impl Launcher {
             settings_page,
             host_page: false,
             realm_popup: false,
+            news_open: None,
+            notes_preview: false,
             font_client: String::new(),
             game_font: false,
             news: Vec::new(),
@@ -652,7 +658,7 @@ impl Launcher {
                 let (tx, rx) = mpsc::channel();
                 let ctx = cc.egui_ctx.clone();
                 std::thread::spawn(move || {
-                    if let Ok(items) = osfr_launcher::release::fetch_news(4) {
+                    if let Ok(items) = osfr_launcher::release::fetch_news(8) {
                         let _ = tx.send(items);
                         ctx.request_repaint();
                     }
@@ -1576,6 +1582,9 @@ impl eframe::App for Launcher {
             }
         }
         if let Some(Ok(items)) = self.news_rx.as_ref().map(|rx| rx.try_recv()) {
+            if self.notes_preview {
+                self.news_open = items.first().cloned();
+            }
             self.news = items;
             self.news_rx = None;
         }
@@ -1648,6 +1657,8 @@ impl eframe::App for Launcher {
         if let Some(path) = &self.screenshot {
             let capture_delay = if self.test_vine_growth.is_some() {
                 600
+            } else if self.notes_preview {
+                4000
             } else {
                 1700
             };
@@ -1727,6 +1738,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut test_vine_growth = None;
     let mut patch_preview = false;
     let mut join_preview = false;
+    let mut notes_preview = false;
     let mut window_size = [940.0, 790.0];
     let mut args = raw_args.into_iter();
     while let Some(arg) = args.next() {
@@ -1755,6 +1767,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             test_vine_growth = Some(millis as f32 / 1500.0);
         } else if arg == "--test-patch-progress" {
             patch_preview = true;
+        } else if arg == "--test-notes" {
+            notes_preview = true;
         } else if arg == "--test-join-flow" {
             join_preview = true;
         } else if arg == "--window-size" {
@@ -1824,6 +1838,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(std::io::Error::other)?;
             launcher.patch_preview = patch_preview;
             launcher.host_page = host_page;
+            launcher.notes_preview = notes_preview;
             if let Some(folder) = &client {
                 launcher.client = folder.to_string_lossy().into_owned();
             }

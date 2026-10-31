@@ -761,6 +761,12 @@ impl Url {
         }
         Ok(url)
     }
+    /// A GitHub API list page: the only query is `per_page`, a number from code, never from input.
+    pub(crate) fn release_list(text: &str, per_page: u8) -> Result<Self> {
+        let mut url = Self::release(text)?;
+        url.path = format!("{}?per_page={per_page}", url.path);
+        Ok(url)
+    }
     /// The next hop of a redirect: absolute, same rules as [`Self::release`], and a
     /// plain-HTTP loopback hop is possible only from a loopback origin. Signed CDN
     /// links carry a query string, so it is checked separately and kept verbatim.
@@ -1216,6 +1222,13 @@ mod tests {
         ] {
             assert!(client_manifest(&bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn release_lists_add_only_a_page_size_to_a_github_url() {
+        let url = Url::release_list("https://api.github.com/repos/a/b/releases", 3).unwrap();
+        assert_eq!(url.path, "/repos/a/b/releases?per_page=3");
+        assert!(Url::release_list("https://example.com/releases", 3).is_err());
     }
 
     #[test]

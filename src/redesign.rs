@@ -66,6 +66,7 @@ impl Launcher {
                     self.play_screen(ui);
                 }
             });
+        self.notes_window(ctx);
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
@@ -157,102 +158,190 @@ impl Launcher {
                         RichText::new("News shows here when you are online.").color(Color32::WHITE),
                     );
                 }
-                for item in self.news.clone() {
-                    let (card, response) = ui.allocate_exact_size(
-                        Vec2::new(ui.available_width(), 70.0),
-                        egui::Sense::click(),
-                    );
-                    self.art.piece(ui.painter(), Piece::Card, card);
-                    let ring = egui::Rect::from_center_size(
-                        egui::pos2(card.left() + 36.0, card.center().y),
-                        Vec2::splat(46.0),
-                    );
-                    self.art.icon(ui.painter(), 2, ring.shrink(9.0));
-                    self.art.piece(ui.painter(), Piece::ThumbRing, ring);
-                    let text = egui::pos2(card.left() + 68.0, card.top() + 14.0);
-                    let clip = ui.painter().with_clip_rect(card.shrink(10.0));
-                    let title = item
-                        .title
-                        .split(':')
-                        .next()
-                        .unwrap_or_default()
-                        .replace(" (early preview)", "");
-                    let tag = format!("{} \u{b7} {}", title.to_uppercase(), item.date);
-                    clip.text(
-                        text,
-                        egui::Align2::LEFT_TOP,
-                        tag,
-                        egui::FontId::proportional(11.5),
-                        Color32::from_rgb(14, 95, 125),
-                    );
-                    let line = if item.headline.is_empty() {
-                        &title
-                    } else {
-                        &item.headline
-                    };
-                    let mut job = egui::text::LayoutJob::simple_singleline(
-                        line.clone(),
-                        egui::FontId::proportional(15.0),
-                        INK,
-                    );
-                    job.wrap =
-                        egui::text::TextWrapping::truncate_at_width(card.right() - text.x - 16.0);
-                    clip.galley(text + Vec2::new(0.0, 18.0), clip.layout_job(job), INK);
-                    if response.clicked() && !item.url.is_empty() {
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(&item.url));
-                    }
-                    ui.add_space(6.0);
-                }
-                // A bubble sized to its contents, pinned to the bottom of the panel: the launcher's GitHub page.
-                let label = ui
-                    .painter()
-                    .layout_no_wrap("GitHub".into(), theme::display(17.0), INK);
-                let size = Vec2::new(14.0 + 20.0 + 8.0 + label.size().x + 16.0, 36.0);
-                let area = ui.max_rect();
-                let pill = egui::Rect::from_min_size(
-                    egui::pos2(area.center().x - size.x / 2.0, area.bottom() - size.y),
-                    size,
-                );
-                let link = ui.interact(pill, ui.id().with("github-updates"), egui::Sense::click());
-                let stroke = if link.hovered() || link.has_focus() {
-                    3.0_f32
-                } else {
-                    2.0_f32
-                };
-                let painter = ui.painter();
-                painter.rect(
-                    pill,
-                    size.y / 2.0,
-                    Color32::WHITE,
-                    egui::Stroke::new(stroke, TEAL_INK),
-                    egui::StrokeKind::Inside,
-                );
-                painter.image(
-                    self.art.github_mark().id(),
-                    egui::Rect::from_center_size(
-                        egui::pos2(pill.left() + 24.0, pill.center().y),
-                        Vec2::splat(20.0),
-                    ),
-                    theme::unit_uv(),
-                    INK,
-                );
-                painter.galley(
-                    egui::pos2(pill.left() + 42.0, pill.center().y - label.size().y / 2.0),
-                    label,
-                    INK,
-                );
-                if link.clicked() {
-                    ui.ctx().open_url(egui::OpenUrl::new_tab(
-                        "https://github.com/FadedSociety/free-realms-launcher",
-                    ));
-                }
-                link.on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text("Take me to the GitHub page");
+                // The cards scroll between the title and the GitHub bubble on the panel's own scroll bar.
+                let list_h = ui.available_height() - 36.0 - 12.0;
+                ui.scope(|ui| {
+                    themed_scroll(ui);
+                    egui::ScrollArea::vertical()
+                        .max_height(list_h)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| self.news_cards(ui));
+                });
                 if self.patch_active() {
                     self.patch_progress_ui(ui);
                 }
+                self.github_bubble(ui);
             },
         );
+    }
+
+    fn news_cards(&mut self, ui: &mut egui::Ui) {
+        for item in self.news.clone() {
+            let (card, response) =
+                ui.allocate_exact_size(Vec2::new(ui.available_width(), 70.0), egui::Sense::click());
+            self.art.piece(ui.painter(), Piece::Card, card);
+            let ring = egui::Rect::from_center_size(
+                egui::pos2(card.left() + 36.0, card.center().y),
+                Vec2::splat(46.0),
+            );
+            self.art.icon(ui.painter(), 2, ring.shrink(9.0));
+            self.art.piece(ui.painter(), Piece::ThumbRing, ring);
+            let text = egui::pos2(card.left() + 68.0, card.top() + 14.0);
+            let clip = ui.painter().with_clip_rect(card.shrink(10.0));
+            let title = short_title(&item.title);
+            let tag = format!("{} \u{b7} {}", title.to_uppercase(), item.date);
+            clip.text(
+                text,
+                egui::Align2::LEFT_TOP,
+                tag,
+                egui::FontId::proportional(11.5),
+                TEAL_INK,
+            );
+            let line = if item.headline.is_empty() {
+                title
+            } else {
+                item.headline.clone()
+            };
+            let mut job = egui::text::LayoutJob::simple_singleline(
+                line,
+                egui::FontId::proportional(15.0),
+                INK,
+            );
+            job.wrap = egui::text::TextWrapping::truncate_at_width(card.right() - text.x - 16.0);
+            clip.galley(text + Vec2::new(0.0, 18.0), clip.layout_job(job), INK);
+            if response.clicked() {
+                self.news_open = Some(item);
+            }
+            response.on_hover_cursor(egui::CursorIcon::PointingHand);
+            ui.add_space(6.0);
+        }
+    }
+
+    /// A bubble sized to its contents, pinned to the bottom of the panel: the launcher's GitHub page.
+    fn github_bubble(&mut self, ui: &mut egui::Ui) {
+        let label = ui
+            .painter()
+            .layout_no_wrap("GitHub".into(), theme::display(17.0), INK);
+        let size = Vec2::new(14.0 + 20.0 + 8.0 + label.size().x + 16.0, 36.0);
+        let area = ui.max_rect();
+        let pill = egui::Rect::from_min_size(
+            egui::pos2(area.center().x - size.x / 2.0, area.bottom() - size.y),
+            size,
+        );
+        let link = ui.interact(pill, ui.id().with("github-updates"), egui::Sense::click());
+        let stroke = if link.hovered() || link.has_focus() {
+            3.0_f32
+        } else {
+            2.0_f32
+        };
+        let painter = ui.painter();
+        painter.rect(
+            pill,
+            size.y / 2.0,
+            Color32::WHITE,
+            egui::Stroke::new(stroke, TEAL_INK),
+            egui::StrokeKind::Inside,
+        );
+        painter.image(
+            self.art.github_mark().id(),
+            egui::Rect::from_center_size(
+                egui::pos2(pill.left() + 24.0, pill.center().y),
+                Vec2::splat(20.0),
+            ),
+            theme::unit_uv(),
+            INK,
+        );
+        painter.galley(
+            egui::pos2(pill.left() + 42.0, pill.center().y - label.size().y / 2.0),
+            label,
+            INK,
+        );
+        if link.clicked() {
+            ui.ctx().open_url(egui::OpenUrl::new_tab(
+                "https://github.com/FadedSociety/free-realms-launcher",
+            ));
+        }
+        link.on_hover_cursor(egui::CursorIcon::PointingHand)
+            .on_hover_text("Take me to the GitHub page");
+    }
+
+    /// A news card's full release notes over the launcher. Esc, Close or a click outside closes it.
+    fn notes_window(&mut self, ctx: &egui::Context) {
+        let Some(item) = self.news_open.clone() else {
+            return;
+        };
+        let screen = ctx.content_rect();
+        let mut close = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        egui::Area::new(egui::Id::new("rd-notes"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen.min)
+            .show(ctx, |ui| {
+                let scrim = ui.allocate_rect(screen, egui::Sense::click());
+                ui.painter()
+                    .rect_filled(screen, 0.0, Color32::from_black_alpha(170));
+                close |= scrim.clicked();
+                let panel = egui::Rect::from_center_size(
+                    screen.center(),
+                    Vec2::new(
+                        (screen.width() - 80.0).min(760.0),
+                        (screen.height() - 80.0).min(640.0),
+                    ),
+                );
+                // The panel takes its own clicks so only the scrim closes the window.
+                ui.allocate_rect(panel, egui::Sense::click());
+                ui.painter().add(theme::panel_shape(&self.art, panel));
+                ui.scope_builder(
+                    egui::UiBuilder::new().max_rect(panel.shrink(PANEL_PAD)),
+                    |ui| {
+                        panel_title(ui, &short_title(&item.title));
+                        ui.vertical_centered(|ui| {
+                            ui.label(
+                                RichText::new(&item.date).color(Color32::from_rgb(222, 222, 250)),
+                            );
+                        });
+                        ui.add_space(8.0);
+                        let body_h = ui.available_height() - 52.0 - 12.0;
+                        ui.scope(|ui| {
+                            themed_scroll(ui);
+                            egui::ScrollArea::vertical()
+                                .max_height(body_h)
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| notes_text(ui, &item.body));
+                        });
+                        ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            let github = !item.url.is_empty();
+                            let width = if github { 190.0 + 12.0 + 130.0 } else { 130.0 };
+                            ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
+                            if github
+                                && theme::button(
+                                    ui,
+                                    &self.art,
+                                    "Open on GitHub",
+                                    Vec2::new(190.0, 50.0),
+                                    true,
+                                    theme::ButtonSkin::Standard,
+                                )
+                                .clicked()
+                            {
+                                ui.ctx().open_url(egui::OpenUrl::new_tab(&item.url));
+                            }
+                            close |= theme::button(
+                                ui,
+                                &self.art,
+                                "Close",
+                                Vec2::new(130.0, 50.0),
+                                true,
+                                theme::ButtonSkin::Standard,
+                            )
+                            .clicked();
+                        });
+                    },
+                );
+            });
+        if close {
+            self.news_open = None;
+        }
     }
 
     fn hero_window(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
@@ -835,4 +924,93 @@ fn panel_title(ui: &mut egui::Ui, text: &str) {
                 .color(Color32::WHITE),
         );
     });
+}
+
+/// A release name for cards and the notes title: "Server v0.1.4", no "(early preview)" or subtitle.
+fn short_title(title: &str) -> String {
+    title
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .replace(" (early preview)", "")
+}
+
+/// The purple panels' scroll bar: always-solid, a dark purple track and a lavender handle.
+fn themed_scroll(ui: &mut egui::Ui) {
+    let style = ui.style_mut();
+    style.spacing.scroll = egui::style::ScrollStyle::solid();
+    style.spacing.scroll.bar_width = 10.0;
+    style.spacing.scroll.dormant_background_opacity = 1.0;
+    style.spacing.scroll.active_background_opacity = 1.0;
+    style.spacing.scroll.interact_background_opacity = 1.0;
+    style.spacing.scroll.dormant_handle_opacity = 1.0;
+    style.spacing.scroll.active_handle_opacity = 1.0;
+    style.visuals.extreme_bg_color = Color32::from_rgb(52, 44, 92);
+    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(186, 180, 240);
+    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(214, 210, 250);
+    style.visuals.widgets.active.bg_fill = Color32::WHITE;
+}
+
+/// Release notes as the launcher shows them: `#` headings, `-` bullets and paragraphs, in white on the
+/// purple panel (7:1), with 6 points between lines.
+fn notes_text(ui: &mut egui::Ui, body: &str) {
+    ui.spacing_mut().item_spacing.y = 6.0;
+    for line in body.lines() {
+        let line = plain(line.trim());
+        let heading = ["### ", "## ", "# "]
+            .iter()
+            .find_map(|h| line.strip_prefix(*h));
+        let bullet = ["- ", "* "].iter().find_map(|b| line.strip_prefix(*b));
+        if line.is_empty() {
+            ui.add_space(4.0);
+        } else if let Some(heading) = heading {
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(heading)
+                    .font(theme::display(18.0))
+                    .color(Color32::WHITE),
+            );
+        } else if let Some(bullet) = bullet {
+            ui.label(
+                RichText::new(format!("\u{2022}  {bullet}"))
+                    .size(15.0)
+                    .color(Color32::WHITE),
+            );
+        } else {
+            ui.label(RichText::new(line).size(15.0).color(Color32::WHITE));
+        }
+    }
+}
+
+/// Markdown marks dropped: `[text](url)` keeps its text, `**` and backticks go.
+fn plain(line: &str) -> String {
+    let mut out = String::new();
+    let mut rest = line;
+    while let Some(open) = rest.find('[') {
+        let Some(mid) = rest[open..].find("](").map(|m| open + m) else {
+            break;
+        };
+        let Some(close) = rest[mid..].find(')').map(|c| mid + c) else {
+            break;
+        };
+        out.push_str(&rest[..open]);
+        out.push_str(&rest[open + 1..mid]);
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
+    out.replace("**", "").replace('`', "")
+}
+
+#[cfg(test)]
+mod notes_tests {
+    use super::plain;
+
+    #[test]
+    fn plain_keeps_link_text_and_drops_markdown_marks() {
+        assert_eq!(
+            plain("See [v0.2.2](https://github.com/x) **now**, run `osfr-gateway`."),
+            "See v0.2.2 now, run osfr-gateway."
+        );
+        assert_eq!(plain("a [b] c"), "a [b] c");
+    }
 }

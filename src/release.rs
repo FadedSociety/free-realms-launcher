@@ -463,6 +463,8 @@ pub struct NewsItem {
     pub title: String,
     /// One line from the release notes for the news card.
     pub headline: String,
+    /// The full release notes (GitHub markdown) for the notes window.
+    pub body: String,
     pub date: String,
     pub url: String,
 }
@@ -472,14 +474,17 @@ pub struct NewsItem {
 pub fn fetch_news(limit: usize) -> Result<Vec<NewsItem>> {
     let cancel = AtomicBool::new(false);
     let mut items = Vec::new();
-    for (repo, label) in [
-        (REPO, "Server"),
-        ("FadedSociety/free-realms-launcher", "Launcher"),
+    // ponytail: the API lists every asset (about 200 per server release, ~340 KB each), so a few
+    // releases cost about 1 MB; move to the releases.atom feed if that grows.
+    for (repo, label, count) in [
+        (REPO, "Server", 3),
+        ("FadedSociety/free-realms-launcher", "Launcher", 5),
     ] {
-        let url = Url::release(&format!(
-            "https://api.github.com/repos/{repo}/releases/latest"
-        ))?;
-        let body = fetch_bytes(&url, 1 << 20, &cancel)?;
+        let url = Url::release_list(
+            &format!("https://api.github.com/repos/{repo}/releases"),
+            count,
+        )?;
+        let body = fetch_bytes(&url, 4 << 20, &cancel)?;
         items.extend(news_items(&body, label)?);
     }
     items.sort_by(|a, b| b.date.cmp(&a.date));
@@ -509,6 +514,7 @@ fn news_items(body: &[u8], label: &str) -> Result<Vec<NewsItem>> {
             NewsItem {
                 title: format!("{label} {name}"),
                 headline: headline(&text("body")),
+                body: text("body"),
                 date: text("published_at").chars().take(10).collect(),
                 url: if url.starts_with("https://github.com/") {
                     url
@@ -520,23 +526,32 @@ fn news_items(body: &[u8], label: &str) -> Result<Vec<NewsItem>> {
         .collect())
 }
 
-/// The first `## ` heading of release notes, else their first sentence, without markdown marks.
+/// A news headline from release notes: a `## New: X` heading's X, else the first bullet's name under a
+/// `## New ...` heading, else the first sentence, without markdown marks.
 fn headline(body: &str) -> String {
-    let line = match body.lines().find_map(|l| l.strip_prefix("## ")) {
-        Some(heading) => heading.trim_start_matches("New: ").to_owned(),
-        None => {
-            let text = body.replace("**", "").replace("Early preview.", "");
-            let text = text.trim();
-            text.split(". ")
-                .next()
-                .unwrap_or(text)
-                .lines()
-                .next()
-                .unwrap_or("")
-                .trim_end_matches('.')
-                .to_owned()
-        }
-    };
+    let lines: Vec<&str> = body.lines().map(str::trim).collect();
+    let new = lines.iter().position(|l| l.starts_with("## New"));
+    let from_new = new.and_then(|i| match lines[i].strip_prefix("## New: ") {
+        Some(heading) => Some(heading.to_owned()),
+        None => lines[i + 1..]
+            .iter()
+            .take_while(|l| !l.starts_with("## "))
+            .find_map(|l| l.strip_prefix("- "))
+            .map(|bullet| bullet.split(": ").next().unwrap_or(bullet).to_owned()),
+    });
+    let line = from_new.unwrap_or_else(|| {
+        let text = body.replace("**", "").replace("Early preview.", "");
+        let text = text.trim();
+        text.split(". ")
+            .next()
+            .unwrap_or(text)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim_end_matches('.')
+            .to_owned()
+    });
+    let line = line.replace("**", "");
     let line = line.replace('`', "");
     let mut chars = line.trim().chars();
     chars
@@ -550,7 +565,7 @@ mod news_tests {
     use super::*;
 
     #[test]
-    fn headline_takes_the_first_heading_else_the_first_sentence() {
+    fn headline_comes_from_the_new_section_else_the_first_sentence() {
         assert_eq!(
             headline("Early preview. Install it.\n\n## New: host on the internet\n\nText."),
             "Host on the internet"
@@ -560,6 +575,13 @@ mod news_tests {
             "A redesigned launcher: art"
         );
         assert_eq!(headline(""), "");
+        assert_eq!(
+            headline(
+                "## How to use\nGet it.\n\n## New since v0.1.2\n- **Opening labels**: the text shows."
+            ),
+            "Opening labels",
+            "a How-to heading is not news; the New section's first bullet is"
+        );
     }
 
     #[test]
