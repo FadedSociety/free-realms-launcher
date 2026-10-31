@@ -781,7 +781,9 @@ impl Launcher {
             self.join_broker = default_broker(&address);
             self.join_broker_edited = false;
             self.join_open = true;
-            self.message = "Finish joining this realm: paste your host's join details and pick your name.".into();
+            self.message =
+                "Finish joining this realm: paste your host's join details and pick your name."
+                    .into();
             return;
         }
         let settings = self.settings;
@@ -870,7 +872,9 @@ impl Launcher {
                     }
                 }
                 _ => {
-                    self.message = "Enter your public IP (search \"what is my IP\") to host on the internet.".into();
+                    self.message =
+                        "Enter your public IP (search \"what is my IP\") to host on the internet."
+                            .into();
                     return;
                 }
             }
@@ -1958,17 +1962,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             launcher.notes_preview = notes_preview;
             if servers_preview {
                 launcher.servers_page = true;
-                launcher.browser = [("Housing Party", "Come decorate with us"), ("Kart Night", "Demo Derby every evening"), ("Sanctuary Hangout", "")]
-                    .iter()
-                    .enumerate()
-                    .map(|(i, (name, about))| osfr_launcher::directory::Listing {
-                        name: (*name).into(),
-                        description: (*about).into(),
-                        address: format!("203.0.113.{}:20042", i + 7),
-                        broker: format!("203.0.113.{}:20043", i + 7),
-                        identity: format!("{:02x}", i).repeat(32),
-                    })
-                    .collect();
+                launcher.browser = [
+                    ("Housing Party", "Come decorate with us"),
+                    ("Kart Night", "Demo Derby every evening"),
+                    ("Sanctuary Hangout", ""),
+                ]
+                .iter()
+                .enumerate()
+                .map(|(i, (name, about))| osfr_launcher::directory::Listing {
+                    name: (*name).into(),
+                    description: (*about).into(),
+                    address: format!("203.0.113.{}:20042", i + 7),
+                    broker: format!("203.0.113.{}:20043", i + 7),
+                    identity: format!("{:02x}", i).repeat(32),
+                })
+                .collect();
                 launcher.favorites = vec!["01".repeat(32)];
             }
             if join_window_preview {

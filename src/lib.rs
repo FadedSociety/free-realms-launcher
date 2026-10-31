@@ -188,7 +188,8 @@ pub fn validate_endpoint(value: &str) -> Result<()> {
 fn io_error(error: io::Error) -> String {
     // Local paths and auth-bearing batch/config contents do not enter UI logs.
     if error.kind() == io::ErrorKind::NotFound {
-        return "A client file is missing. Download the client again in Settings to repair it.".into();
+        return "A client file is missing. Download the client again in Settings to repair it."
+            .into();
     }
     "Client file operation failed. Check folder permissions and available disk space.".into()
 }
@@ -503,7 +504,10 @@ impl LaunchPlan {
         // it goes through the Responder, which fetches everything it does not hold from the
         // community host.
         let assets = if local_assets && gm_tools::installed(&root) {
-            Some(assets::Responder::start_with_upstream(&root, Some(COMMUNITY_ASSETS_URL))?)
+            Some(assets::Responder::start_with_upstream(
+                &root,
+                Some(COMMUNITY_ASSETS_URL),
+            )?)
         } else if local_assets {
             None
         } else {
@@ -513,7 +517,9 @@ impl LaunchPlan {
         let baseline = replace_setting(
             &config,
             "IndirectServerAddress",
-            assets.as_ref().map_or(COMMUNITY_ASSETS_URL, |a| a.url.as_str()),
+            assets
+                .as_ref()
+                .map_or(COMMUNITY_ASSETS_URL, |a| a.url.as_str()),
         )?;
         let mut options = text_or(&root, "UserOptions.ini", DEFAULT_OPTIONS)?;
         for (key, value) in [

@@ -24,6 +24,26 @@ const ENVELOPE: u32 = 0xA1B2C3D4;
 const ALIGNMENT: usize = 8192;
 /// (R) Bounds an inflated UI movie; the stock chat window is ~160 KB.
 const MOVIE_LIMIT: usize = 64 * 1024 * 1024;
+/// The admin GM wheel's words the stock locale lacks: the server's `player_gm_menu::LABELS`
+/// (same ids, same order). Remove leaves them: text nothing names is harmless.
+const LABELS: [(u32, &str); 16] = [
+    (7_900_000, "GM"),
+    (7_900_001, "Ban"),
+    (7_900_002, "Summon"),
+    (7_900_003, "Role"),
+    (7_900_004, "10 minutes"),
+    (7_900_005, "1 hour"),
+    (7_900_006, "1 day"),
+    (7_900_007, "Forever"),
+    (7_900_008, "100"),
+    (7_900_009, "1,000"),
+    (7_900_010, "10,000"),
+    (7_900_011, "100,000"),
+    (7_900_012, "1,000,000"),
+    (7_900_013, "Player"),
+    (7_900_014, "Tester"),
+    (7_900_015, "Moderator"),
+];
 
 struct Mod {
     stock: &'static str,
@@ -45,7 +65,10 @@ const MODS: [Mod; 2] = [
         // and the chat itself stays drawn 1:1 at the bottom left (the PR's layout).
         edits: &[
             ("UI\\chatWindowCtrl.swf", "UI\\frxChatWindowCtrl.swf"),
-            ("Width=\"550\" Height=\"345\"", "Width=\"2000\" Height=\"1045\""),
+            (
+                "Width=\"550\" Height=\"345\"",
+                "Width=\"2000\" Height=\"1045\"",
+            ),
         ],
     },
     Mod {
@@ -77,7 +100,12 @@ pub fn install(client: &Path) -> Result<()> {
         );
         // Manifest rows as the stock ones: `name,crc32,size`; a `.lst` is published as `.lst.z`
         // with the crc of the plain list and the size of its A1B2C3D4 envelope.
-        lines.push(format!("{}.gfx,{},{}", m.published, crc32(&movie), movie.len()));
+        lines.push(format!(
+            "{}.gfx,{},{}",
+            m.published,
+            crc32(&movie),
+            movie.len()
+        ));
         lines.push(format!(
             "{}.lst.z,{},{}",
             m.published,
@@ -94,12 +122,24 @@ pub fn install(client: &Path) -> Result<()> {
     fs::write(&pack, write_pack(&assets)).map_err(|e| e.to_string())?;
     fs::write(
         client.join(MARKER),
-        pack.file_name().unwrap_or_default().to_string_lossy().as_bytes(),
+        pack.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .as_bytes(),
     )
     .map_err(|e| e.to_string())?;
     for m in &MODS {
         patch_window(client, m)?;
     }
+    let labels: Vec<_> = LABELS
+        .iter()
+        .map(|&(hash, text)| crate::client_text::Row {
+            hash,
+            tag: "ugdt".into(),
+            text: text.into(),
+        })
+        .collect();
+    crate::client_text::add_rows(client, &labels).map_err(|e| format!("GM wheel labels: {e}"))?;
     set_manifest_rows(client, &lines)
 }
 
@@ -155,7 +195,11 @@ fn set_manifest_rows(client: &Path, rows: &[String]) -> Result<()> {
     let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut out: String = text
         .split_inclusive('\n')
-        .filter(|line| !MODS.iter().any(|m| line.starts_with(&format!("{}.", m.published))))
+        .filter(|line| {
+            !MODS
+                .iter()
+                .any(|m| line.starts_with(&format!("{}.", m.published)))
+        })
         .collect();
     if !out.is_empty() && !out.ends_with('\n') {
         out.push_str("\r\n");
@@ -212,13 +256,15 @@ fn write_pack(assets: &[(String, Vec<u8>)]) -> Vec<u8> {
 /// Add `script` (complete DoAction tag records) after the stock DoAction of `frame`, before that
 /// frame's ShowFrame. GFX movies are SWF with a `GFX`/`CFX` signature (CFX: zlib after 8 bytes).
 fn add_script(movie: &[u8], frame: u16, script: &[u8]) -> Result<Vec<u8>> {
-    let bad = || "A UI movie in the client could not be read; download the client again.".to_owned();
-    let (signature, version) = (movie.get(..3).ok_or_else(bad)?, *movie.get(3).ok_or_else(bad)?);
+    let bad =
+        || "A UI movie in the client could not be read; download the client again.".to_owned();
+    let (signature, version) = (
+        movie.get(..3).ok_or_else(bad)?,
+        *movie.get(3).ok_or_else(bad)?,
+    );
     let body = match signature {
-        b"CFX" => {
-            miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&movie[8..], MOVIE_LIMIT)
-                .map_err(|_| bad())?
-        }
+        b"CFX" => miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&movie[8..], MOVIE_LIMIT)
+            .map_err(|_| bad())?,
         b"GFX" => movie[8..].to_vec(),
         _ => return Err(bad()),
     };
@@ -229,7 +275,12 @@ fn add_script(movie: &[u8], frame: u16, script: &[u8]) -> Result<Vec<u8>> {
         let head = u16::from_le_bytes(body.get(at..at + 2).ok_or_else(bad)?.try_into().unwrap());
         let (code, short) = (head >> 6, (head & 0x3F) as usize);
         let (header, length) = if short == 0x3F {
-            let long = u32::from_le_bytes(body.get(at + 2..at + 6).ok_or_else(bad)?.try_into().unwrap());
+            let long = u32::from_le_bytes(
+                body.get(at + 2..at + 6)
+                    .ok_or_else(bad)?
+                    .try_into()
+                    .unwrap(),
+            );
             (6, long as usize)
         } else {
             (2, short)
@@ -263,7 +314,12 @@ fn add_script(movie: &[u8], frame: u16, script: &[u8]) -> Result<Vec<u8>> {
 
 fn envelope(data: &[u8]) -> Vec<u8> {
     let packed = miniz_oxide::deflate::compress_to_vec_zlib(data, 9);
-    [&ENVELOPE.to_be_bytes()[..], &(data.len() as u32).to_be_bytes(), &packed].concat()
+    [
+        &ENVELOPE.to_be_bytes()[..],
+        &(data.len() as u32).to_be_bytes(),
+        &packed,
+    ]
+    .concat()
 }
 
 fn replace_bytes(data: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
@@ -284,11 +340,13 @@ fn replace_bytes(data: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
 /// Standard CRC-32 (the manifest's and the pack index's).
 fn crc32(bytes: &[u8]) -> u32 {
     let table: [u32; 256] = std::array::from_fn(|n| {
-        (0..8).fold(n as u32, |c, _| (c >> 1) ^ (0xEDB8_8320 & (c & 1).wrapping_neg()))
+        (0..8).fold(n as u32, |c, _| {
+            (c >> 1) ^ (0xEDB8_8320 & (c & 1).wrapping_neg())
+        })
     });
-    !bytes
-        .iter()
-        .fold(!0_u32, |c, &b| table[((c ^ u32::from(b)) & 0xFF) as usize] ^ (c >> 8))
+    !bytes.iter().fold(!0_u32, |c, &b| {
+        table[((c ^ u32::from(b)) & 0xFF) as usize] ^ (c >> 8)
+    })
 }
 
 #[cfg(test)]
@@ -307,7 +365,11 @@ mod tests {
         body.extend(tag(12, &[0xAA, 0]));
         body.extend(tag(1, &[]));
         body.extend(tag(0, &[]));
-        let mut out = if compressed { b"CFX\x09".to_vec() } else { b"GFX\x09".to_vec() };
+        let mut out = if compressed {
+            b"CFX\x09".to_vec()
+        } else {
+            b"GFX\x09".to_vec()
+        };
         out.extend(((body.len() + 8) as u32).to_le_bytes());
         if compressed {
             out.extend(miniz_oxide::deflate::compress_to_vec_zlib(&body, 6));
@@ -332,11 +394,18 @@ mod tests {
             let both = [stock.as_slice(), &ours].concat();
             let at = body.windows(both.len()).position(|w| w == both.as_slice());
             assert!(at.is_some(), "stock DoAction, then ours");
-            assert_eq!(&body[at.unwrap() + both.len()..][..2], &(1u16 << 6).to_le_bytes(), "then ShowFrame");
+            assert_eq!(
+                &body[at.unwrap() + both.len()..][..2],
+                &(1u16 << 6).to_le_bytes(),
+                "then ShowFrame"
+            );
             let length = u32::from_le_bytes(patched[4..8].try_into().unwrap()) as usize;
             assert_eq!(length, body.len() + 8);
         }
-        assert!(add_script(&movie(false), 3, &ours).is_err(), "no third frame");
+        assert!(
+            add_script(&movie(false), 3, &ours).is_err(),
+            "no third frame"
+        );
     }
 
     /// Dev check against a real client copy (OSFR_GM_CLIENT): install, then remove.
@@ -352,13 +421,33 @@ mod tests {
         let movie = pack_file(&client, "frxChatWindowCtrl.gfx").unwrap();
         let inflated = miniz_oxide::inflate::decompress_to_vec_zlib(&movie[8..]).unwrap();
         assert!(inflated.windows(64).any(|w| w == &PANEL[..64]));
-        assert!(fs::read_to_string(client.join(MODS[0].window)).unwrap().contains("frxChatWindowCtrl.swf"));
+        assert!(
+            fs::read_to_string(client.join(MODS[0].window))
+                .unwrap()
+                .contains("frxChatWindowCtrl.swf")
+        );
         let rows = fs::read_to_string(client.join("Assets_manifest.txt")).unwrap();
-        assert_eq!(rows.matches("frx").count(), 4, "one row per published file, not doubled");
+        assert_eq!(
+            rows.matches("frx").count(),
+            4,
+            "one row per published file, not doubled"
+        );
+        let locale = fs::read_to_string(client.join("locale/en_us_data.dat")).unwrap();
+        assert_eq!(
+            locale.matches("7900015\tugdt\tModerator").count(),
+            1,
+            "labels added once"
+        );
         fs::write(client.join("frx-check.gfx"), &movie).unwrap();
         remove(&client).unwrap();
-        assert_eq!(fs::read_to_string(client.join(MODS[0].window)).unwrap(), window);
-        assert_eq!(fs::read(client.join("Assets_manifest.txt")).unwrap(), manifest);
+        assert_eq!(
+            fs::read_to_string(client.join(MODS[0].window)).unwrap(),
+            window
+        );
+        assert_eq!(
+            fs::read(client.join("Assets_manifest.txt")).unwrap(),
+            manifest
+        );
         assert!(!installed(&client));
     }
 
@@ -366,7 +455,10 @@ mod tests {
     fn a_written_pack_is_read_back_and_manifest_rows_replace_ours_only() {
         let assets = vec![
             ("frxGameDock.gfx".to_owned(), vec![1, 2, 3]),
-            ("frxGameDock.lst".to_owned(), b"#CRC64\nUI\\frxGameDock.gfx".to_vec()),
+            (
+                "frxGameDock.lst".to_owned(),
+                b"#CRC64\nUI\\frxGameDock.gfx".to_vec(),
+            ),
         ];
         let dir = std::env::temp_dir().join(format!("osfr-gm-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -375,14 +467,21 @@ mod tests {
         assert_eq!(pack_file(&dir, "frxGameDock.gfx").unwrap(), [1u8, 2, 3]);
         assert!(pack_file(&dir, "gamedock.gfx").is_err());
         assert_eq!(&envelope(b"abc")[..4], &ENVELOPE.to_be_bytes());
-        fs::write(dir.join("Assets_manifest.txt"), "a.gfx,1,2\r\nfrxGameDock.gfx,9,9\r\nb.lst.z,3,4\r\n").unwrap();
+        fs::write(
+            dir.join("Assets_manifest.txt"),
+            "a.gfx,1,2\r\nfrxGameDock.gfx,9,9\r\nb.lst.z,3,4\r\n",
+        )
+        .unwrap();
         set_manifest_rows(&dir, &["frxGameDock.gfx,5,6".into()]).unwrap();
         assert_eq!(
             fs::read_to_string(dir.join("Assets_manifest.txt")).unwrap(),
             "a.gfx,1,2\r\nb.lst.z,3,4\r\nfrxGameDock.gfx,5,6\r\n"
         );
         set_manifest_rows(&dir, &[]).unwrap();
-        assert_eq!(fs::read_to_string(dir.join("Assets_manifest.txt")).unwrap(), "a.gfx,1,2\r\nb.lst.z,3,4\r\n");
+        assert_eq!(
+            fs::read_to_string(dir.join("Assets_manifest.txt")).unwrap(),
+            "a.gfx,1,2\r\nb.lst.z,3,4\r\n"
+        );
         fs::remove_dir_all(&dir).unwrap();
         assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
     }

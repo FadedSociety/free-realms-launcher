@@ -146,7 +146,11 @@ fn serve(
         .map(|(target, _)| target);
     let found = target
         .and_then(|target| body(target, folder, crc))
-        .or_else(|| upstream.zip(target).and_then(|(up, target)| from_upstream(up, target)));
+        .or_else(|| {
+            upstream
+                .zip(target)
+                .and_then(|(up, target)| from_upstream(up, target))
+        });
     let status = if found.is_some() {
         "200 OK"
     } else {
@@ -204,7 +208,8 @@ fn from_upstream(upstream: &str, target: &str) -> Option<(u64, Box<dyn Read>)> {
     {
         return None;
     }
-    let url = crate::patch::Url::parse(&format!("{upstream}{}", target.replace(' ', "%20"))).ok()?;
+    let url =
+        crate::patch::Url::parse(&format!("{upstream}{}", target.replace(' ', "%20"))).ok()?;
     let (length, response) = crate::patch::open(&url).ok()?;
     Some((length, Box::new(response.take(length))))
 }

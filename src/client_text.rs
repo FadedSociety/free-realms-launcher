@@ -26,10 +26,10 @@ struct Additions {
 }
 
 #[derive(Deserialize)]
-struct Row {
-    hash: u32,
-    tag: String,
-    text: String,
+pub(crate) struct Row {
+    pub(crate) hash: u32,
+    pub(crate) tag: String,
+    pub(crate) text: String,
 }
 
 /// Add the rows of `additions` (a release's `locale-additions.json`) that `client`'s en_US locale
@@ -56,9 +56,15 @@ pub fn ensure_rows(client: &Path, additions: &Path) -> io::Result<usize> {
             return Err(invalid("locale additions: a row is not one plain line"));
         }
     }
+    add_rows(client, &additions.rows)
+}
+
+/// Add the `rows` that `client`'s en_US locale lacks; rows already there are never changed.
+/// Returns how many were added. The GM tools' wheel labels use it too.
+pub(crate) fn add_rows(client: &Path, rows: &[Row]) -> io::Result<usize> {
     let (dat_path, dir_path) = paths(client);
     let (dat, dir) = (read_bounded(&dat_path)?, read_bounded(&dir_path)?);
-    let (merged, added) = merge(&dat, &dir, &additions.rows)?;
+    let (merged, added) = merge(&dat, &dir, rows)?;
     if added == 0 {
         return Ok(0);
     }
