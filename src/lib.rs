@@ -4,6 +4,7 @@ pub mod assets;
 pub mod auth;
 pub mod character_select;
 pub mod client_text;
+pub mod directory;
 pub mod local;
 pub mod patch;
 pub mod release;

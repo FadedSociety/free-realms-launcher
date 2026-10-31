@@ -511,6 +511,16 @@ pub(crate) fn download(
     fs::rename(&partial, destination).map_err(io_error)
 }
 
+/// Server browser: POST a JSON body (at most 4 KiB) and return the status and the reply (at most 64 KiB).
+pub(crate) fn post_json(url: &Url, body: &[u8]) -> Result<(u32, Vec<u8>)> {
+    if body.len() > 4096 {
+        return Err("Request too large.".into());
+    }
+    let mut response = native::send(url, 0, Some(body))?;
+    let reply = read_manifest(&mut response, 64 * 1024, &AtomicBool::new(false))?;
+    Ok((response.status, reply))
+}
+
 /// Cloudflare Web Analytics on the community host adds `<script ... cloudflareinsights.com/...></script>`
 /// (and a newline) to HTML files. Remove that one tag; the caller's size and hash checks decide whether
 /// what is left is the original file.
@@ -1017,6 +1027,11 @@ mod native {
         ))
     }
     pub(super) fn get(url: &Url, offset: u64) -> Result<Response> {
+        send(url, offset, None)
+    }
+
+    /// GET, or POST with a JSON body (the server browser directory).
+    pub(super) fn send(url: &Url, offset: u64, body: Option<&[u8]>) -> Result<Response> {
         // SAFETY: all UTF-16 inputs are NUL terminated and live through each
         // synchronous call. Handles are owned in dependency order by Response.
         // No certificate validation flags are disabled; TLS belongs to WinHTTP.
@@ -1052,7 +1067,7 @@ mod native {
             ))?;
             let request = Internet::new(WinHttpOpenRequest(
                 connection.0,
-                wide("GET").as_ptr(),
+                wide(if body.is_some() { "POST" } else { "GET" }).as_ptr(),
                 wide(&url.path).as_ptr(),
                 wide("HTTP/1.1").as_ptr(),
                 null(),
@@ -1069,14 +1084,19 @@ mod native {
             } else {
                 String::new()
             };
-            let headers = wide(&format!("Accept-Encoding: identity\r\n{range}"));
+            let kind = if body.is_some() {
+                "Content-Type: application/json\r\n"
+            } else {
+                ""
+            };
+            let headers = wide(&format!("Accept-Encoding: identity\r\n{kind}{range}"));
             if WinHttpSendRequest(
                 request.0,
                 headers.as_ptr(),
                 (headers.len() - 1) as u32,
-                null(),
-                0,
-                0,
+                body.map_or(null(), |b| b.as_ptr().cast()),
+                body.map_or(0, |b| b.len() as u32),
+                body.map_or(0, |b| b.len() as u32),
                 0,
             ) == 0
                 || WinHttpReceiveResponse(request.0, null_mut()) == 0
