@@ -81,6 +81,7 @@ impl Launcher {
                 }
             });
         self.notes_window(ctx);
+        self.join_window(ctx);
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
@@ -362,6 +363,150 @@ impl Launcher {
         }
         link.on_hover_cursor(egui::CursorIcon::PointingHand)
             .on_hover_text("Take me to the GitHub page");
+    }
+
+    /// Join a friend's realm: paste the host's join details (or an address), check the fingerprint,
+    /// pick a name. The same key-pair join as Settings, in one window.
+    fn join_window(&mut self, ctx: &egui::Context) {
+        if !self.join_open {
+            return;
+        }
+        let screen = ctx.content_rect();
+        let mut close = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        egui::Area::new(egui::Id::new("rd-join"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen.min)
+            .show(ctx, |ui| {
+                let scrim = ui.allocate_rect(screen, egui::Sense::click());
+                ui.painter()
+                    .rect_filled(screen, 0.0, Color32::from_black_alpha(170));
+                close |= scrim.clicked();
+                let panel = egui::Rect::from_center_size(
+                    screen.center(),
+                    Vec2::new(
+                        (screen.width() - 80.0).min(640.0),
+                        (screen.height() - 60.0).min(430.0),
+                    ),
+                );
+                ui.allocate_rect(panel, egui::Sense::click());
+                ui.painter().add(theme::panel_shape(&self.art, panel));
+                ui.scope_builder(
+                    egui::UiBuilder::new().max_rect(panel.shrink(PANEL_PAD)),
+                    |ui| {
+                        panel_title(ui, "Join a friend's realm");
+                        ui.label(
+                            RichText::new(
+                                "Paste the join details your host copied, then pick your name there.",
+                            )
+                            .color(Color32::WHITE),
+                        );
+                        ui.add_space(8.0);
+                        let width = ui.available_width();
+                        let address = theme::text_field(
+                            ui,
+                            &self.art,
+                            &mut self.join_address,
+                            "Join details or realm address, e.g. 203.0.113.7:20042",
+                            Vec2::new(width, 42.0),
+                            261,
+                        );
+                        self.record_focus(FocusTarget::AddAddress, &address);
+                        if address.changed() {
+                            split_join_details(&mut self.join_address, &mut self.join_identity);
+                            if !self.join_broker_edited {
+                                self.join_broker = default_broker(&self.join_address);
+                            }
+                            self.join_public_key = None;
+                        }
+                        ui.add_space(6.0);
+                        theme::text_field(
+                            ui,
+                            &self.art,
+                            &mut self.join_identity,
+                            "Server identity (from the join details, or Join asks the realm)",
+                            Vec2::new(width, 42.0),
+                            64,
+                        );
+                        let note = match parse_server_identity(&self.join_identity) {
+                            Some(identity) => format!(
+                                "Fingerprint {}: check it matches the one your host sees.",
+                                short_fingerprint(&identity)
+                            ),
+                            None => "No identity yet: Join asks the realm for it.".into(),
+                        };
+                        ui.label(RichText::new(note).color(Color32::from_rgb(222, 222, 250)));
+                        ui.add_space(6.0);
+                        theme::text_field(
+                            ui,
+                            &self.art,
+                            &mut self.join_handle,
+                            "Your name on that realm (3-32 letters, digits, _ or -)",
+                            Vec2::new(width, 42.0),
+                            32,
+                        );
+                        ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(((ui.available_width() - 160.0 - 12.0 - 130.0) / 2.0).max(0.0));
+                            let ready = !self.join_address.trim().is_empty()
+                                && self.join_handle.trim().len() >= 3
+                                && self.screenshot.is_none();
+                            if theme::button(
+                                ui,
+                                &self.art,
+                                "Join",
+                                Vec2::new(160.0, 50.0),
+                                ready,
+                                theme::ButtonSkin::Standard,
+                            )
+                            .clicked()
+                                && self.join_realm()
+                            {
+                                close = true;
+                            }
+                            close |= theme::button(
+                                ui,
+                                &self.art,
+                                "Cancel",
+                                Vec2::new(130.0, 50.0),
+                                true,
+                                theme::ButtonSkin::Standard,
+                            )
+                            .clicked();
+                        });
+                    },
+                );
+            });
+        if close {
+            self.join_open = false;
+        }
+    }
+
+    /// Ask the realm for its identity when none was pasted, then make this PC's key for it. A bare
+    /// address entry for the same realm (from older launchers) is replaced by the joined one.
+    fn join_realm(&mut self) -> bool {
+        if parse_server_identity(&self.join_identity).is_none() {
+            // ponytail: one bounded exchange (2 s connect, 3 s reply) on the UI thread, as in Settings.
+            match auth::fetch_identity(&self.join_broker) {
+                Ok(identity) => {
+                    self.join_identity = identity.iter().map(|b| format!("{b:02x}")).collect();
+                }
+                Err(error) => {
+                    self.message = auth_error_message(error);
+                    return false;
+                }
+            }
+        }
+        let address = self.join_address.trim().to_owned();
+        self.servers
+            .retain(|s| !(s.profile_id.is_empty() && s.address == address));
+        self.selected = self.selected.min(self.servers.len().saturating_sub(1));
+        self.join_public_key = None;
+        self.create_join_profile();
+        if self.join_public_key.is_none() {
+            return false;
+        }
+        self.message = "Joined. Press PLAY NOW! Your first login makes your account there.".into();
+        true
     }
 
     /// A news card's full release notes over the launcher. Esc, Close or a click outside closes it.
@@ -665,44 +810,19 @@ impl Launcher {
                                 self.selected = index;
                             }
                         }
-                        ui.horizontal(|ui| {
-                            let field = theme::text_field(
-                                ui,
-                                &self.art,
-                                &mut self.new_address,
-                                "Add host:port",
-                                Vec2::new(220.0, 40.0),
-                                261,
-                            );
-                            self.record_focus(FocusTarget::AddAddress, &field);
-                            let add = theme::button(
-                                ui,
-                                &self.art,
-                                "Add",
-                                Vec2::new(90.0, 40.0),
-                                self.servers.len() < 16,
-                                theme::ButtonSkin::Standard,
-                            );
-                            self.record_focus(FocusTarget::AddRealm, &add);
-                            if add.clicked() {
-                                match osfr_launcher::validate_endpoint(&self.new_address) {
-                                    Ok(()) => {
-                                        self.servers.push(Server {
-                                            name: "Custom realm".into(),
-                                            address: self.new_address.clone(),
-                                            profile_id: String::new(),
-                                            patch: PatchSource::default(),
-                                        });
-                                        self.selected = self.servers.len() - 1;
-                                        self.new_address.clear();
-                                        self.message =
-                                            "Realm added. Select a saved profile or Local login."
-                                                .into();
-                                    }
-                                    Err(error) => self.message = error,
-                                }
-                            }
-                        });
+                        let join = theme::button(
+                            ui,
+                            &self.art,
+                            "Join a friend's realm",
+                            Vec2::new(ui.available_width().min(280.0), 44.0),
+                            self.servers.len() < 16,
+                            theme::ButtonSkin::Standard,
+                        );
+                        self.record_focus(FocusTarget::AddRealm, &join);
+                        if join.clicked() {
+                            self.join_open = true;
+                            self.realm_popup = false;
+                        }
                         if let Some(server) = self.servers.get_mut(self.selected) {
                             let label =
                                 profile_label(&server.profile_id, &self.profiles).to_owned();
@@ -1163,7 +1283,7 @@ Open the **Host** tab and pick who can join:
 Press **HOST & PLAY** and allow the Windows firewall prompt for private networks. Then press **Copy join details** and send the realm address and server identity to your players. The realm runs while your game is open. To choose who can join, list their handles in server/state/whitelist.txt.
 
 ## 4. Join a friend's realm
-Open **Settings** and fill in **Join a realm**: paste the realm address your host sent (the login broker fills itself in), then paste their server identity or press **Ask the realm for its identity** and check the fingerprint matches theirs. Pick an account handle and press **Create my key**: the key stays on this PC and no password is ever sent. Back on **Play**, press **Change**, choose their realm and press **PLAY NOW!**.
+Press **Change** above PLAY NOW!, then **Join a friend's realm**. Paste the join details your host copied (realm address and server identity), check the fingerprint matches theirs, pick your name and press **Join**. Your key stays on this PC and no password is ever sent. Then press **PLAY NOW!**; your first login makes your account there.
 
 ## Controllers and handhelds
 The launcher scales to any window. A controller moves between the tabs, PLAY NOW! and the Settings fields; the Host tab is touch or mouse for now.
@@ -1171,3 +1291,51 @@ The launcher scales to any window. A controller moves between the tabs, PLAY NOW
 ## Need more help?
 Click any news card for its full release notes, or open the launcher's GitHub page for guides and bug reports.
 ";
+
+/// The host's Copy join details text ("Realm address: A" then "Server identity: H", on two lines or
+/// run together when a single-line field drops the newline) pasted into the address field: split it.
+fn split_join_details(address: &mut String, identity: &mut String) {
+    let text = address.clone();
+    let Some(at) = text.find("Server identity:") else {
+        if let Some(rest) = text.trim().strip_prefix("Realm address:") {
+            *address = rest.trim().to_owned();
+        }
+        return;
+    };
+    let (head, tail) = text.split_at(at);
+    *identity = tail["Server identity:".len()..]
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .take(64)
+        .collect();
+    *address = head
+        .trim()
+        .trim_start_matches("Realm address:")
+        .trim()
+        .to_owned();
+}
+
+#[cfg(test)]
+mod join_tests {
+    use super::split_join_details;
+
+    #[test]
+    fn pasted_join_details_fill_address_and_identity() {
+        let hex = "ab".repeat(32);
+        for pasted in [
+            format!("Realm address: 203.0.113.7:20042\nServer identity: {hex}"),
+            format!("Realm address: 203.0.113.7:20042Server identity: {hex}"),
+        ] {
+            let (mut address, mut identity) = (pasted, String::new());
+            split_join_details(&mut address, &mut identity);
+            assert_eq!(address, "203.0.113.7:20042");
+            assert_eq!(identity, hex);
+        }
+        let (mut address, mut identity) = ("198.51.100.2:20042".to_owned(), String::new());
+        split_join_details(&mut address, &mut identity);
+        assert_eq!(
+            (address.as_str(), identity.as_str()),
+            ("198.51.100.2:20042", "")
+        );
+    }
+}

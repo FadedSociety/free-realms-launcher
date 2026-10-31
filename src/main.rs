@@ -549,7 +549,6 @@ pub(crate) struct Launcher {
     art: theme::UiArt,
     servers: Vec<Server>,
     selected: usize,
-    new_address: String,
     join_address: String,
     join_broker: String,
     join_broker_edited: bool,
@@ -565,6 +564,8 @@ pub(crate) struct Launcher {
     host_page: bool,
     /// v0.3.1: the realm chooser over the hero scene (Change).
     realm_popup: bool,
+    /// v0.3.3: the Join a friend's realm window is open.
+    join_open: bool,
     /// v0.3.2: the public IP lookup running for the Host tab.
     ip_rx: Option<mpsc::Receiver<Option<std::net::Ipv4Addr>>>,
     /// v0.3.2: the remembered choices as last written to launcher.json.
@@ -647,7 +648,6 @@ impl Launcher {
                 patch: PatchSource::default(),
             }],
             selected: 0,
-            new_address: String::new(),
             join_address: String::new(),
             join_broker: String::new(),
             join_broker_edited: false,
@@ -661,6 +661,7 @@ impl Launcher {
             settings_page,
             host_page: false,
             realm_popup: false,
+            join_open: false,
             ip_rx: None,
             prefs_saved: String::new(),
             fit_size: Vec2::ZERO,
@@ -741,6 +742,16 @@ impl Launcher {
         let server = &self.servers[self.selected];
         let address = server.address.clone();
         let profile_id = server.profile_id.trim().to_owned();
+        // v0.3.3: a realm known only by its address has no login yet; finish joining it first.
+        if profile_id.is_empty() && !address.starts_with("127.") {
+            self.join_address = address.clone();
+            self.join_identity.clear();
+            self.join_broker = default_broker(&address);
+            self.join_broker_edited = false;
+            self.join_open = true;
+            self.message = "Finish joining this realm: paste your host's join details and pick your name.".into();
+            return;
+        }
         let settings = self.settings;
         let content = self
             .launcher_dir
@@ -1767,6 +1778,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut join_preview = false;
     let mut notes_preview = false;
     let mut guide_preview = false;
+    let mut join_window_preview = false;
     let mut window_size = [940.0, 790.0];
     let mut args = raw_args.into_iter();
     while let Some(arg) = args.next() {
@@ -1795,6 +1807,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             test_vine_growth = Some(millis as f32 / 1500.0);
         } else if arg == "--test-patch-progress" {
             patch_preview = true;
+        } else if arg == "--test-join" {
+            join_window_preview = true;
         } else if arg == "--test-guide" {
             guide_preview = true;
         } else if arg == "--test-notes" {
@@ -1870,6 +1884,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             launcher.patch_preview = patch_preview;
             launcher.host_page = host_page;
             launcher.notes_preview = notes_preview;
+            if join_window_preview {
+                launcher.join_open = true;
+                launcher.join_address = "203.0.113.7:20042".into();
+                launcher.join_identity = "3fa9".repeat(16);
+                launcher.join_handle = "Rowan".into();
+            }
             if guide_preview {
                 launcher.news_open = Some(redesign::guide_item());
             }
