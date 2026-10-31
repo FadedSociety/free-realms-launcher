@@ -566,6 +566,7 @@ pub(crate) struct Launcher {
     realm_popup: bool,
     /// Server browser: list the hosted realm, its name and description (saved in launcher.json).
     list_realm: bool,
+    test_realm: bool,
     realm_name: String,
     realm_description: String,
     /// Server browser: the Servers tab, its list, search and favourites (realm identities).
@@ -677,6 +678,7 @@ impl Launcher {
             host_page: false,
             realm_popup: false,
             list_realm: false,
+            test_realm: false,
             realm_name: String::new(),
             realm_description: String::new(),
             servers_page: false,
@@ -855,6 +857,9 @@ impl Launcher {
             self.start_server_job(true);
             return;
         }
+        local.test_realm = self.host
+            && self.test_realm
+            && osfr_launcher::local::server_release_at_least(&root, (0, 1, 7));
         if self.host && self.host_internet {
             match self.host_public.trim().parse::<std::net::IpAddr>() {
                 Ok(ip) if !ip.is_unspecified() && !ip.is_loopback() && !ip.is_multicast() => {

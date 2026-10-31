@@ -183,6 +183,9 @@ pub struct LocalSettings {
     /// Server browser (server v0.1.5+): the realm's listing key; login then proves the realm to the
     /// directory (`--listing-key-file`).
     pub listing_key: Option<PathBuf>,
+    /// v0.3.5 (server v0.1.7+): accounts made by enrollment are testers (every realm command
+    /// except moderation), so players on a test realm give themselves what they need.
+    pub test_realm: bool,
 }
 
 impl LocalSettings {
@@ -202,6 +205,7 @@ impl LocalSettings {
             host: None,
             public: None,
             listing_key: None,
+            test_realm: false,
         }
     }
 
@@ -384,17 +388,55 @@ pub fn login_args(settings: &LocalSettings, client: &Path, plan: &RunPlan) -> Ve
     if let Some(key) = &settings.listing_key {
         args.extend(["--listing-key-file".into(), path(key)]);
     }
+    if settings.test_realm && settings.host.is_some() {
+        args.extend(["--new-account-role".into(), "tester".into()]);
+    }
     args
 }
 
 /// Server browser: the installed server knows `--listing-key-file` (release v0.1.5 or later).
 pub fn server_supports_listing(root: &Path) -> bool {
+    server_release_at_least(root, (0, 1, 5))
+}
+
+/// The installed server's release tag (`server/.osfr-release.json`) is at least `min`.
+pub fn server_release_at_least(root: &Path, min: (u32, u32, u32)) -> bool {
     let text = fs::read_to_string(root.join("server").join(".osfr-release.json")).unwrap_or_default();
     let tag = serde_json::from_str::<serde_json::Value>(&text)
         .ok()
         .and_then(|v| v.get("tag")?.as_str().map(str::to_owned))
         .unwrap_or_default();
-    release_at_least(&tag, (0, 1, 5))
+    release_at_least(&tag, min)
+}
+
+/// v0.3.5: the logs of earlier sessions stay as `<name>-<unix seconds>.log`, the last ten per
+/// server, so a playtest's evidence survives the next start.
+fn keep_old_logs(dir: &Path) -> io::Result<()> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    for name in ["gateway", "login"] {
+        let live = dir.join(format!("{name}.log"));
+        if live.is_file() {
+            fs::rename(&live, dir.join(format!("{name}-{stamp}.log")))?;
+        }
+        let prefix = format!("{name}-");
+        let mut old: Vec<PathBuf> = fs::read_dir(dir)?
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with(&prefix) && n.ends_with(".log"))
+            })
+            .collect();
+        old.sort();
+        for path in old.iter().rev().skip(10) {
+            let _ = fs::remove_file(path);
+        }
+    }
+    Ok(())
 }
 
 fn release_at_least(tag: &str, min: (u32, u32, u32)) -> bool {
@@ -551,6 +593,7 @@ impl LocalRealm {
         ensure_login_key(&settings.login_key, client)?;
         let log_dir = realm_dir.join("logs");
         fs::create_dir_all(&log_dir)?;
+        keep_old_logs(&log_dir)?;
         let handoff_key = realm_dir.join("handoff.key");
         let mut key = [0u8; 16];
         getrandom::getrandom(&mut key).map_err(|_| io::Error::other("no OS randomness"))?;
@@ -692,6 +735,38 @@ mod tests {
             handoff_key: PathBuf::from(r"C:\realm\handoff.key"),
             log_dir: PathBuf::from(r"C:\realm\logs"),
         }
+    }
+
+    #[test]
+    fn a_test_realm_makes_enrolled_players_testers_and_old_logs_are_kept() {
+        let mut s = settings();
+        let client = Path::new(r"C:\client");
+        let tester = |s: &LocalSettings| {
+            login_args(s, client, &plan())
+                .windows(2)
+                .any(|w| w[0] == "--new-account-role" && w[1] == "tester")
+        };
+        s.test_realm = true;
+        assert!(!tester(&s), "playing alone enrolls nobody");
+        s.host = Some("0.0.0.0".parse().unwrap());
+        assert!(tester(&s));
+        s.test_realm = false;
+        assert!(!tester(&s));
+        assert!(release_at_least("v0.1.7", (0, 1, 7)) && !release_at_least("v0.1.6", (0, 1, 7)));
+
+        let dir = std::env::temp_dir().join(format!("osfr-logs-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        for n in 0..12 {
+            fs::write(dir.join(format!("gateway-17000000{n:02}.log")), b"old").unwrap();
+        }
+        fs::write(dir.join("gateway.log"), b"last session").unwrap();
+        keep_old_logs(&dir).unwrap();
+        assert!(!dir.join("gateway.log").exists());
+        let kept: Vec<_> = fs::read_dir(&dir).unwrap().flatten().collect();
+        assert_eq!(kept.len(), 10, "the newest ten stay");
+        assert!(kept.iter().any(|e| fs::read(e.path()).unwrap() == b"last session"));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

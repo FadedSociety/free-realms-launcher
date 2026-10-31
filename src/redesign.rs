@@ -227,6 +227,7 @@ impl Launcher {
             "host_internet": self.host_internet,
             "host_public": self.host_public.trim(),
             "list_realm": self.list_realm,
+            "test_realm": self.test_realm,
             "realm_name": self.realm_name.trim(),
             "realm_description": self.realm_description.trim(),
             "favorites": self.favorites,
@@ -263,6 +264,10 @@ impl Launcher {
         self.host_public = text_of("host_public");
         self.list_realm = prefs
             .get("list_realm")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        self.test_realm = prefs
+            .get("test_realm")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
         self.realm_name = text_of("realm_name");
@@ -1289,6 +1294,16 @@ impl Launcher {
                     .color(Color32::WHITE),
                 ),
             };
+        }
+        if self.host {
+            ui.add_space(8.0);
+            ui.checkbox(
+                &mut self.test_realm,
+                RichText::new(
+                    "Test realm: new players can give themselves items, coins and Station Cash (no moderation)",
+                )
+                .color(Color32::WHITE),
+            );
         }
     }
 
