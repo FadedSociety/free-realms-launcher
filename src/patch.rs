@@ -430,7 +430,21 @@ pub(crate) fn download(
     }
     if offset < entry.size {
         let mut response = fetch(url, offset)?;
-        if response.status == 200 {
+        if response.status == 200 && response.length.is_none() && entry.size <= 1 << 20 {
+            // The community host's CDN adds its analytics beacon to HTML and streams it with no
+            // length. Without that tag the bytes must be the original: size here, hash below.
+            let body = read_manifest(&mut response, entry.size + 64 * 1024, cancel)
+                .map_err(|_| "Patch server reported the wrong file size.".to_owned())?;
+            let body = strip_cdn_beacon(&body);
+            if body.len() as u64 != entry.size {
+                return Err("Patch server reported the wrong file size.".into());
+            }
+            file.set_len(0).map_err(io_error)?;
+            file.write_all(&body).map_err(io_error)?;
+            offset = entry.size;
+            *transferred += entry.size;
+            progress(offset);
+        } else if response.status == 200 {
             // Servers may ignore Range. Accept only the complete expected body.
             if response.length != Some(entry.size) {
                 return Err("Patch server reported the wrong file size.".into());
@@ -495,6 +509,29 @@ pub(crate) fn download(
     // Same-directory rename replaces atomically, preserving the old destination
     // on failure. Never remove the installed file first.
     fs::rename(&partial, destination).map_err(io_error)
+}
+
+/// Cloudflare Web Analytics on the community host adds `<script ... cloudflareinsights.com/...></script>`
+/// (and a newline) to HTML files. Remove that one tag; the caller's size and hash checks decide whether
+/// what is left is the original file.
+fn strip_cdn_beacon(body: &[u8]) -> Vec<u8> {
+    let find = |from: usize, needle: &[u8]| {
+        body.get(from..)?
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .map(|i| i + from)
+    };
+    let Some(marker) = find(0, b"cloudflareinsights.com/") else {
+        return body.to_vec();
+    };
+    let (Some(start), Some(close)) = (
+        body[..marker].windows(7).rposition(|w| w == b"<script"),
+        find(marker, b"</script>"),
+    ) else {
+        return body.to_vec();
+    };
+    let end = close + 9 + usize::from(body.get(close + 9) == Some(&b'\n'));
+    [&body[..start], &body[end..]].concat()
 }
 
 /// L070: the community host's client manifest and file root (the source the community launcher
@@ -1163,7 +1200,11 @@ mod native {
 
 #[cfg(test)]
 mod tests {
-    use super::{Url, client_manifest, xxh64};
+    use super::{
+        CLIENT_FILES_URL, CLIENT_MANIFEST_URL, MANIFEST_LIMIT, Url, client_manifest, download,
+        fetch_bytes, root, strip_cdn_beacon, xxh64,
+    };
+    use std::{fs, sync::atomic::AtomicBool};
 
     /// L070: the xxHash specification's vectors (seed 0); real client files were also checked
     /// against their manifest hashes (actionIndex.dat, FreeRealms.exe) outside the repository.
@@ -1174,6 +1215,58 @@ mod tests {
         // Long input exercises the four-lane stripe loop and the 8/4/1-byte tails.
         let long: Vec<u8> = (0..=255u8).cycle().take(1000).collect();
         assert_ne!(xxh64(&long), xxh64(&long[1..]));
+    }
+
+    #[test]
+    fn the_cdn_beacon_is_removed_and_nothing_else() {
+        let served = b"<html>\r\n<body>x\r\n<script defer src=\"https://static.cloudflareinsights.com/beacon.min.js/v1\" data-cf-beacon='{}'></script>\n</body>\r\n";
+        assert_eq!(
+            strip_cdn_beacon(served),
+            b"<html>\r\n<body>x\r\n</body>\r\n"
+        );
+        let plain = b"<html><script src=\"a.js\"></script></html>";
+        assert_eq!(
+            strip_cdn_beacon(plain),
+            plain.to_vec(),
+            "other scripts stay"
+        );
+    }
+
+    /// The community host's one HTML client file arrives with the beacon; the download restores the
+    /// original, size and XXH64 checked (2026-10-31).
+    #[test]
+    #[ignore = "live community host"]
+    fn live_client_html_installs_through_the_cdn_beacon() {
+        let manifest = fetch_bytes(
+            &Url::parse(CLIENT_MANIFEST_URL).unwrap(),
+            MANIFEST_LIMIT,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        let entries = client_manifest(&String::from_utf8(manifest).unwrap()).unwrap();
+        let entry = entries
+            .iter()
+            .find(|e| e.path.ends_with("loading.html"))
+            .unwrap();
+        let dir = std::env::temp_dir().join(format!("osfr-cdn-beacon-{}", std::process::id()));
+        fs::create_dir_all(dir.join("Resources").join("WebBrowser")).unwrap();
+        let root = root(&dir).unwrap();
+        let url = Url::parse(CLIENT_FILES_URL).unwrap().file(&entry.path);
+        let mut moved = 0;
+        download(
+            &root,
+            entry,
+            &url,
+            &AtomicBool::new(false),
+            |_| {},
+            &mut moved,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::metadata(root.join(&entry.path)).unwrap().len(),
+            entry.size
+        );
+        fs::remove_dir_all(dir).ok();
     }
 
     /// L070: the live community manifest parses whole (1,788 files on 2026-10-12) and lists the
