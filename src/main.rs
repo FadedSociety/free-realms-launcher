@@ -562,6 +562,8 @@ pub(crate) struct Launcher {
     host_page: bool,
     /// v0.3.1: the realm chooser over the hero scene (Change).
     realm_popup: bool,
+    /// The window size (native points) the zoom was last fitted to.
+    fit_size: Vec2,
     /// v0.3.1: the release whose full notes show over the launcher.
     news_open: Option<osfr_launcher::release::NewsItem>,
     /// Test aid: open the newest release's notes when the news arrives.
@@ -652,6 +654,7 @@ impl Launcher {
             settings_page,
             host_page: false,
             realm_popup: false,
+            fit_size: Vec2::ZERO,
             news_open: None,
             notes_preview: false,
             font_client: String::new(),
@@ -1565,12 +1568,16 @@ impl eframe::App for Launcher {
             ctx.request_repaint_after(Duration::from_millis(33));
         }
         // Redesign 2026-10-30: the whole UI scales with the window around the default 940x790
-        // (handhelds shrink to 0.8, a maximised widescreen grows to 1.5).
-        let fit = ctx.input(|i| {
-            let px = i.viewport().inner_rect?.size() * i.pixels_per_point();
-            Some(px / i.viewport().native_pixels_per_point?)
+        // (handhelds shrink to 0.8, a maximised widescreen grows to 1.5). v0.3.2: the size comes from
+        // this frame's viewport rect and pixels per point (both set at frame start; `inner_rect` can lag a
+        // zoom change by a frame, which made the zoom flip back and forth), and the zoom is only worked
+        // out again when that physical size changes, so a zoom change can never re-trigger itself.
+        let size = ctx.input(|i| {
+            let native = i.viewport().native_pixels_per_point.unwrap_or(1.0);
+            (i.viewport_rect().size() * i.pixels_per_point() / native).round()
         });
-        if let Some(size) = fit {
+        if size != self.fit_size && size.x > 0.0 && size.y > 0.0 {
+            self.fit_size = size;
             let zoom = (size.x / 940.0).min(size.y / 790.0).clamp(0.8, 1.5);
             if (ctx.zoom_factor() - zoom).abs() > 0.02 {
                 ctx.set_zoom_factor(zoom);

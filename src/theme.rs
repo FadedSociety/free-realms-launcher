@@ -662,6 +662,25 @@ fn text_field_impl(
     );
     let response = inner.inner;
     let rect = inner.response.rect;
+    // Hold on a touch screen (or right-click): Paste and Copy, since handhelds have no Ctrl+V.
+    let open = (response.secondary_clicked() || response.long_touched())
+        .then_some(egui::SetOpenCommand::Bool(true));
+    egui::Popup::menu(&response)
+        .open_memory(open)
+        .at_pointer_fixed()
+        .show(|ui| {
+            if interactive && ui.button("Paste").clicked() {
+                // The backend reads the clipboard into the focused field on the next frame.
+                ui.memory_mut(|memory| memory.request_focus(response.id));
+                ui.ctx()
+                    .send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                ui.close();
+            }
+            if ui.button("Copy").clicked() {
+                ui.ctx().copy_text(value.clone());
+                ui.close();
+            }
+        });
     let mut shapes = vec![nine_slice(
         &art.text_field,
         rect.shrink(1.0),
