@@ -49,6 +49,10 @@ use std::{
 
 pub type Result<T> = std::result::Result<T, String>;
 const LOCALE: [&str; 2] = ["en_us_data.dat", "en_us_data.dir"];
+/// The community asset server (Sanctuary's client setup uses it too). The community client streams
+/// the world (AssetsW_*.pack, geometry and zone music) from it on first launch, about 2.2 GB, and
+/// checks each asset against the catalog's CRCs. (R) Plain HTTP, as the original game's asset server.
+pub const COMMUNITY_ASSETS_URL: &str = "http://osfr.editz.dev/assets";
 /// L070: Microsoft's DirectX End-User Runtime, which installs the legacy D3DX9 DLLs the client loads.
 /// The launcher links to it and never ships the DLL.
 pub const DIRECTX_RUNTIME_URL: &str = "https://www.microsoft.com/en-us/download/details.aspx?id=35";
@@ -484,32 +488,26 @@ impl LaunchPlan {
             regular(&root, &format!("locale/{name}"))?;
         }
         // The original install streams assets from an asset server, so the launcher serves them
-        // locally (and needs Assets_manifest.txt). The community host's client reads its assets from
-        // its own folder (IndirectServerAddress=file://./manifest), so that setting stays as it is.
+        // locally (and needs Assets_manifest.txt). The community host's client is set to read them
+        // from its own folder (file://./manifest) but ships without the world packs, so it streams
+        // them from the community asset server instead, as the community's own setup does.
         let config = text(&root, "ClientConfig.ini")?;
         let local_assets = config.lines().any(|line| {
             line.trim()
                 .to_ascii_lowercase()
                 .starts_with("indirectserveraddress=file://")
         });
-        // Read locally, the world (AssetsW_*.pack, geometry and zone music) must be on disk; without
-        // it the game stops at asset init with code 27. The community download lacks those packs.
-        if local_assets && !root.join("AssetsW_000.pack").is_file() {
-            return Err(
-                "This client has no world files (AssetsW_*.pack). Use a full Free Realms client folder."
-                    .into(),
-            );
-        }
         let assets = if local_assets {
             None
         } else {
             Some(assets::Responder::start(&root)?)
         };
         let config = offline_urls(&replace_setting(&config, "Server", endpoint)?);
-        let baseline = match &assets {
-            Some(assets) => replace_setting(&config, "IndirectServerAddress", &assets.url)?,
-            None => config,
-        };
+        let baseline = replace_setting(
+            &config,
+            "IndirectServerAddress",
+            assets.as_ref().map_or(COMMUNITY_ASSETS_URL, |a| a.url.as_str()),
+        )?;
         let mut options = text_or(&root, "UserOptions.ini", DEFAULT_OPTIONS)?;
         for (key, value) in [
             ("WindowedWidth", settings.width.to_string()),

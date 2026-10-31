@@ -645,8 +645,8 @@ fn a_client_without_options_or_batch_still_prepares() {
 }
 
 #[test]
-fn a_community_client_keeps_its_local_assets() {
-    // The community host's client: no Assets_manifest.txt, assets read from its own folder.
+fn a_community_client_streams_its_world_from_the_community_asset_server() {
+    // The community host's client: no Assets_manifest.txt and no world packs (2026-10-31).
     let scratch = Scratch::new();
     fs::remove_file(scratch.0.join("Assets_manifest.txt")).unwrap();
     fs::write(
@@ -654,15 +654,6 @@ fn a_community_client_keeps_its_local_assets() {
         "Server=old:20042\nIndirectServerAddress=file://./manifest\nAddress=lvsadp-old\n",
     )
     .unwrap();
-    let refused = LaunchPlan::build(
-        &scratch.0,
-        "127.0.0.1:20042",
-        None,
-        LaunchSettings::default(),
-        &mut LocalLoginStub,
-    );
-    assert!(refused.is_err(), "no world packs: a clear refusal, not a crash at asset init");
-    fs::write(scratch.0.join("AssetsW_000.pack"), b"world fixture").unwrap();
     let plan = LaunchPlan::build(
         &scratch.0,
         "127.0.0.1:20042",
@@ -677,7 +668,7 @@ fn a_community_client_keeps_its_local_assets() {
     assert!(plan.assets.is_none(), "no responder for a client that reads assets locally");
     plan.apply().unwrap();
     let baseline = fs::read_to_string(scratch.0.join("Baseline.ini")).unwrap();
-    assert!(baseline.contains("IndirectServerAddress=file://./manifest"));
+    assert!(baseline.contains("IndirectServerAddress=http://osfr.editz.dev/assets"));
     assert!(baseline.contains("Server=127.0.0.1:20042"));
 }
 
