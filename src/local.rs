@@ -180,6 +180,9 @@ pub struct LocalSettings {
     /// ports forwarded). With it the realm binds 0.0.0.0 (`host` is `0.0.0.0`), the servers run with
     /// `--allow-public`, and login hands outside players this address for the gateway.
     pub public: Option<IpAddr>,
+    /// Server browser (server v0.1.5+): the realm's listing key; login then proves the realm to the
+    /// directory (`--listing-key-file`).
+    pub listing_key: Option<PathBuf>,
 }
 
 impl LocalSettings {
@@ -198,6 +201,7 @@ impl LocalSettings {
             dev_tools: false,
             host: None,
             public: None,
+            listing_key: None,
         }
     }
 
@@ -377,7 +381,29 @@ pub fn login_args(settings: &LocalSettings, client: &Path, plan: &RunPlan) -> Ve
             args.push("--open-enrollment".into());
         }
     }
+    if let Some(key) = &settings.listing_key {
+        args.extend(["--listing-key-file".into(), path(key)]);
+    }
     args
+}
+
+/// Server browser: the installed server knows `--listing-key-file` (release v0.1.5 or later).
+pub fn server_supports_listing(root: &Path) -> bool {
+    let text = fs::read_to_string(root.join("server").join(".osfr-release.json")).unwrap_or_default();
+    let tag = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| v.get("tag")?.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    release_at_least(&tag, (0, 1, 5))
+}
+
+fn release_at_least(tag: &str, min: (u32, u32, u32)) -> bool {
+    let mut parts = tag
+        .trim_start_matches('v')
+        .split(['.', ' '])
+        .map(|p| p.parse::<u32>().unwrap_or(0));
+    let mut next = || parts.next().unwrap_or(0);
+    (next(), next(), next()) >= min
 }
 
 /// `osfr-account create`: enroll the local profile's public key once.
@@ -863,5 +889,18 @@ mod tests {
         ensure_login_key(&path, &client).unwrap();
         assert_eq!(fs::read(&path).unwrap(), key, "an existing key is kept");
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod listing_tests {
+    use super::release_at_least;
+
+    #[test]
+    fn listing_needs_server_v0_1_5_or_later() {
+        assert!(!release_at_least("v0.1.4", (0, 1, 5)));
+        assert!(release_at_least("v0.1.5", (0, 1, 5)));
+        assert!(release_at_least("v0.2.0", (0, 1, 5)));
+        assert!(!release_at_least("", (0, 1, 5)));
     }
 }

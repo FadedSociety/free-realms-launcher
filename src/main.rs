@@ -564,6 +564,21 @@ pub(crate) struct Launcher {
     host_page: bool,
     /// v0.3.1: the realm chooser over the hero scene (Change).
     realm_popup: bool,
+    /// Server browser: list the hosted realm, its name and description (saved in launcher.json).
+    list_realm: bool,
+    realm_name: String,
+    realm_description: String,
+    /// Server browser: the Servers tab, its list, search and favourites (realm identities).
+    servers_page: bool,
+    browser: Vec<osfr_launcher::directory::Listing>,
+    browser_rx: Option<mpsc::Receiver<Result<Vec<osfr_launcher::directory::Listing>, String>>>,
+    browser_search: String,
+    favorites: Vec<String>,
+    /// The directory to use; empty = osfr_launcher::directory::DIRECTORY_URL.
+    directory_url: String,
+    /// The running announce thread's stop flag and its status lines.
+    announcer: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    announce_rx: Option<mpsc::Receiver<String>>,
     /// v0.3.3: the Join a friend's realm window is open.
     join_open: bool,
     /// v0.3.2: the public IP lookup running for the Host tab.
@@ -661,6 +676,17 @@ impl Launcher {
             settings_page,
             host_page: false,
             realm_popup: false,
+            list_realm: false,
+            realm_name: String::new(),
+            realm_description: String::new(),
+            servers_page: false,
+            browser: Vec::new(),
+            browser_rx: None,
+            browser_search: String::new(),
+            favorites: Vec::new(),
+            directory_url: String::new(),
+            announcer: None,
+            announce_rx: None,
             join_open: false,
             ip_rx: None,
             prefs_saved: String::new(),
@@ -830,6 +856,9 @@ impl Launcher {
                 Ok(ip) if !ip.is_unspecified() && !ip.is_loopback() && !ip.is_multicast() => {
                     local.host = Some(std::net::IpAddr::from([0, 0, 0, 0]));
                     local.public = Some(ip);
+                    if self.list_realm && osfr_launcher::local::server_supports_listing(&root) {
+                        local.listing_key = listing_key_path();
+                    }
                 }
                 _ => {
                     self.message = "Enter your public IP (search \"what is my IP\") to host on the internet.".into();
@@ -1619,6 +1648,9 @@ impl eframe::App for Launcher {
             }
         }
         self.save_prefs();
+        if let Some(Ok(text)) = self.announce_rx.as_ref().map(|rx| rx.try_recv()) {
+            self.message = text;
+        }
         if let Some(Ok(items)) = self.news_rx.as_ref().map(|rx| rx.try_recv()) {
             if self.notes_preview {
                 self.news_open = items.first().cloned();
@@ -1638,6 +1670,7 @@ impl eframe::App for Launcher {
                         Ok((child, responder, realm)) => {
                             self.child = Some((child, responder));
                             self.local = Some(realm);
+                            self.start_announcer();
                             self.message =
                                 "Playing on this PC. The local realm stops when the client closes."
                                     .into();
@@ -1677,6 +1710,7 @@ impl eframe::App for Launcher {
         if let Some((child, _)) = self.child.as_mut() {
             match child.try_wait() {
                 Ok(Some(_)) => {
+                    self.stop_announcer();
                     self.child = None;
                     self.local = None;
                     self.message = "The client has closed.".into();
@@ -1779,6 +1813,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut notes_preview = false;
     let mut guide_preview = false;
     let mut join_window_preview = false;
+    let mut servers_preview = false;
     let mut window_size = [940.0, 790.0];
     let mut args = raw_args.into_iter();
     while let Some(arg) = args.next() {
@@ -1807,6 +1842,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             test_vine_growth = Some(millis as f32 / 1500.0);
         } else if arg == "--test-patch-progress" {
             patch_preview = true;
+        } else if arg == "--test-servers" {
+            servers_preview = true;
         } else if arg == "--test-join" {
             join_window_preview = true;
         } else if arg == "--test-guide" {
@@ -1884,6 +1921,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             launcher.patch_preview = patch_preview;
             launcher.host_page = host_page;
             launcher.notes_preview = notes_preview;
+            if servers_preview {
+                launcher.servers_page = true;
+                launcher.browser = [("Housing Party", "Come decorate with us"), ("Kart Night", "Demo Derby every evening"), ("Sanctuary Hangout", "")]
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (name, about))| osfr_launcher::directory::Listing {
+                        name: (*name).into(),
+                        description: (*about).into(),
+                        address: format!("203.0.113.{}:20042", i + 7),
+                        broker: format!("203.0.113.{}:20043", i + 7),
+                        identity: format!("{:02x}", i).repeat(32),
+                    })
+                    .collect();
+                launcher.favorites = vec!["01".repeat(32)];
+            }
             if join_window_preview {
                 launcher.join_open = true;
                 launcher.join_address = "203.0.113.7:20042".into();
@@ -2484,4 +2536,14 @@ mod tests {
         drop(_owned);
         std::fs::remove_file(path).unwrap();
     }
+}
+
+/// Server browser: the realm's listing key file (32 random bytes, made once beside the local realm).
+fn listing_key_path() -> Option<PathBuf> {
+    let path = auth::ensure_profile_directory(LOCAL_PROFILE)
+        .ok()?
+        .join("realm")
+        .join("listing.key");
+    osfr_launcher::local::server_identity(&path).ok()?;
+    Some(path)
 }

@@ -74,6 +74,8 @@ impl Launcher {
                             egui::ScrollArea::vertical().show(ui, |ui| self.settings_ui(ui));
                         },
                     );
+                } else if self.servers_page {
+                    self.servers_screen(ui);
                 } else if self.host_page {
                     self.host_screen(ui);
                 } else {
@@ -109,18 +111,20 @@ impl Launcher {
                 ui.add_space(14.0);
                 let current = if self.settings_page {
                     2
+                } else if self.servers_page {
+                    3
                 } else if self.host_page {
                     1
                 } else {
                     0
                 };
-                for (page, label) in [(0, "Play"), (1, "Host"), (2, "Settings")] {
+                for (page, label) in [(0, "Play"), (1, "Host"), (3, "Servers"), (2, "Settings")] {
                     let enabled = page != 1 || self.launcher_dir.is_some();
                     let tab = theme::button(
                         ui,
                         &self.art,
                         label,
-                        Vec2::new(if page == 2 { 150.0 } else { 124.0 }, 52.0),
+                        Vec2::new(if page >= 2 { 150.0 } else { 124.0 }, 52.0),
                         enabled,
                         theme::ButtonSkin::Tab {
                             selected: current == page,
@@ -134,6 +138,10 @@ impl Launcher {
                     if tab.clicked() {
                         self.settings_page = page == 2;
                         self.host_page = page == 1;
+                        self.servers_page = page == 3;
+                        if page == 3 {
+                            self.refresh_servers(ui.ctx());
+                        }
                     }
                 }
             },
@@ -218,6 +226,11 @@ impl Launcher {
             "host": self.host,
             "host_internet": self.host_internet,
             "host_public": self.host_public.trim(),
+            "list_realm": self.list_realm,
+            "realm_name": self.realm_name.trim(),
+            "realm_description": self.realm_description.trim(),
+            "favorites": self.favorites,
+            "directory_url": self.directory_url.trim(),
         })
         .to_string()
     }
@@ -241,6 +254,22 @@ impl Launcher {
         };
         self.client = text_of("client");
         self.host_public = text_of("host_public");
+        self.list_realm = prefs
+            .get("list_realm")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        self.realm_name = text_of("realm_name");
+        self.realm_description = text_of("realm_description");
+        self.directory_url = text_of("directory_url");
+        self.favorites = prefs
+            .get("favorites")
+            .and_then(|v| v.as_array())
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
         self.host = prefs.get("host").and_then(|v| v.as_bool()).unwrap_or(false);
         self.host_internet = self.host
             && prefs
@@ -507,6 +536,215 @@ impl Launcher {
         }
         self.message = "Joined. Press PLAY NOW! Your first login makes your account there.".into();
         true
+    }
+
+    fn directory(&self) -> String {
+        match self.directory_url.trim() {
+            "" => osfr_launcher::directory::DIRECTORY_URL.to_owned(),
+            url => url.to_owned(),
+        }
+    }
+
+    /// Announce the hosted realm every minute while it runs (Internet hosting with List my realm on);
+    /// the directory checks it through the realm's broker. Stopping takes it off the list.
+    pub(super) fn start_announcer(&mut self) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        self.stop_announcer();
+        let Some(realm) = self
+            .local
+            .as_ref()
+            .filter(|_| self.list_realm && self.host_internet)
+        else {
+            return;
+        };
+        let Ok(public) = self.host_public.trim().parse::<std::net::IpAddr>() else {
+            return;
+        };
+        let Some(seed) =
+            listing_key_path().and_then(|path| osfr_launcher::local::server_identity(&path).ok())
+        else {
+            return;
+        };
+        let key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let identity: String = realm.identity.iter().map(|b| format!("{b:02x}")).collect();
+        let name = match self.realm_name.trim() {
+            n if n.len() >= 3 => n.to_owned(),
+            _ => "Free Realms realm".to_owned(),
+        };
+        let description = self.realm_description.trim().to_owned();
+        let address =
+            std::net::SocketAddr::new(public, osfr_launcher::local::LOGIN_PORT).to_string();
+        let broker =
+            std::net::SocketAddr::new(public, osfr_launcher::local::BROKER_PORT).to_string();
+        let base = self.directory();
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let stopped = stop.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let listing = osfr_launcher::directory::Announce {
+                name: &name,
+                description: &description,
+                address: &address,
+                broker: &broker,
+                identity: &identity,
+            };
+            let mut last = None;
+            while !stopped.load(Ordering::SeqCst) {
+                let now = osfr_launcher::directory::announce(&base, &key, &listing).err();
+                if now != last {
+                    let _ = tx.send(match &now {
+                        None => "Your realm is listed in the Servers tab.".to_owned(),
+                        Some(error) => format!("Server list: {error}"),
+                    });
+                    last = now;
+                }
+                for _ in 0..60 {
+                    if stopped.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+            }
+            let _ = osfr_launcher::directory::delist(&base, &key, &identity);
+        });
+        self.announcer = Some(stop);
+        self.announce_rx = Some(rx);
+    }
+
+    pub(super) fn stop_announcer(&mut self) {
+        if let Some(stop) = self.announcer.take() {
+            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn refresh_servers(&mut self, ctx: &egui::Context) {
+        if self.browser_rx.is_some() || self.screenshot.is_some() {
+            return;
+        }
+        let (base, ctx) = (self.directory(), ctx.clone());
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(osfr_launcher::directory::servers(&base));
+            ctx.request_repaint();
+        });
+        self.browser_rx = Some(rx);
+    }
+
+    /// The Servers tab: listed realms, favourites first, search, Join through the Join window.
+    fn servers_screen(&mut self, ui: &mut egui::Ui) {
+        if let Some(Ok(result)) = self.browser_rx.as_ref().map(|rx| rx.try_recv()) {
+            self.browser_rx = None;
+            match result {
+                Ok(list) => self.browser = list,
+                Err(error) => self.message = format!("Server list: {error}"),
+            }
+        }
+        let rect = ui.available_rect_before_wrap();
+        ui.allocate_rect(rect, egui::Sense::hover());
+        ui.painter().add(theme::panel_shape(&self.art, rect));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink(PANEL_PAD)), |ui| {
+            panel_title(ui, "Servers");
+            ui.horizontal(|ui| {
+                let width = (ui.available_width() - 140.0).max(160.0);
+                theme::text_field(ui, &self.art, &mut self.browser_search, "Search realms", Vec2::new(width, 40.0), 40);
+                let refresh = theme::button(
+                    ui,
+                    &self.art,
+                    "Refresh",
+                    Vec2::new(124.0, 40.0),
+                    self.browser_rx.is_none(),
+                    theme::ButtonSkin::Standard,
+                );
+                if refresh.clicked() {
+                    self.refresh_servers(ui.ctx());
+                }
+            });
+            ui.add_space(8.0);
+            let needle = self.browser_search.trim().to_lowercase();
+            let mut rows: Vec<_> = self
+                .browser
+                .iter()
+                .filter(|l| {
+                    needle.is_empty()
+                        || l.name.to_lowercase().contains(&needle)
+                        || l.description.to_lowercase().contains(&needle)
+                })
+                .cloned()
+                .collect();
+            rows.sort_by_key(|l| (!self.favorites.contains(&l.identity), l.name.to_lowercase()));
+            if rows.is_empty() {
+                let note = if self.browser_rx.is_some() {
+                    "Loading realms..."
+                } else if self.browser.is_empty() {
+                    "No realms are listed right now. Host one on the Host tab and tick List my realm."
+                } else {
+                    "No realms match your search."
+                };
+                ui.label(RichText::new(note).color(Color32::WHITE));
+            }
+            ui.scope(|ui| {
+                themed_scroll(ui);
+                egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+                    for listing in rows {
+                        let (row, _) =
+                            ui.allocate_exact_size(Vec2::new(ui.available_width(), 64.0), egui::Sense::hover());
+                        self.art.piece(ui.painter(), Piece::Card, row);
+                        let favorite = self.favorites.contains(&listing.identity);
+                        let dot = egui::Rect::from_center_size(
+                            egui::pos2(row.left() + 32.0, row.center().y),
+                            Vec2::splat(32.0),
+                        );
+                        let star = ui.interact(dot, ui.id().with(("favorite", &listing.identity)), egui::Sense::click());
+                        let gold = Color32::from_rgb(196, 132, 0);
+                        ui.painter().circle(
+                            dot.center(),
+                            9.0,
+                            if favorite { gold } else { Color32::TRANSPARENT },
+                            egui::Stroke::new(2.5_f32, gold),
+                        );
+                        if star.clicked() {
+                            if favorite {
+                                self.favorites.retain(|id| id != &listing.identity);
+                            } else {
+                                self.favorites.push(listing.identity.clone());
+                            }
+                        }
+                        star.on_hover_text(if favorite { "Remove from favorites" } else { "Add to favorites" });
+                        let clip = ui.painter().with_clip_rect(row.shrink(10.0));
+                        clip.text(
+                            egui::pos2(row.left() + 58.0, row.top() + 12.0),
+                            egui::Align2::LEFT_TOP,
+                            &listing.name,
+                            theme::display(17.0),
+                            INK,
+                        );
+                        let detail = if listing.description.is_empty() { &listing.address } else { &listing.description };
+                        clip.text(
+                            egui::pos2(row.left() + 58.0, row.top() + 37.0),
+                            egui::Align2::LEFT_TOP,
+                            detail,
+                            egui::FontId::proportional(13.0),
+                            TEAL_INK,
+                        );
+                        let join_rect = egui::Rect::from_min_size(
+                            egui::pos2(row.right() - 134.0, row.center().y - 21.0),
+                            Vec2::new(116.0, 42.0),
+                        );
+                        let join = ui.put(join_rect, |ui: &mut egui::Ui| {
+                            theme::button(ui, &self.art, "Join", Vec2::new(116.0, 42.0), true, theme::ButtonSkin::Standard)
+                        });
+                        if join.clicked() {
+                            self.join_address = listing.address.clone();
+                            self.join_identity = listing.identity.clone();
+                            self.join_broker = listing.broker.clone();
+                            self.join_broker_edited = true;
+                            self.join_open = true;
+                        }
+                        ui.add_space(6.0);
+                    }
+                });
+            });
+        });
     }
 
     /// A news card's full release notes over the launcher. Esc, Close or a click outside closes it.
@@ -996,6 +1234,30 @@ impl Launcher {
                 }
             });
             ui.label(RichText::new("Your router sends these ports to this PC. Not sure how? Search your router's name + \"port forwarding\".").color(Color32::WHITE));
+            ui.add_space(8.0);
+            ui.checkbox(
+                &mut self.list_realm,
+                RichText::new("List my realm in the Servers tab").color(Color32::WHITE),
+            );
+            if self.list_realm {
+                let width = ui.available_width().min(440.0);
+                theme::text_field(
+                    ui,
+                    &self.art,
+                    &mut self.realm_name,
+                    "Realm name, e.g. Housing Party",
+                    Vec2::new(width, 40.0),
+                    32,
+                );
+                theme::text_field(
+                    ui,
+                    &self.art,
+                    &mut self.realm_description,
+                    "Short description (optional)",
+                    Vec2::new(width, 40.0),
+                    100,
+                );
+            }
         } else if self.host {
             match self.host_address {
                 Some(ip) => ui.label(
