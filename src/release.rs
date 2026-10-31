@@ -585,6 +585,12 @@ mod news_tests {
     }
 
     #[test]
+    #[ignore = "live request"]
+    fn live_public_ip() {
+        assert!(!public_ip().unwrap().is_private(), "the lookup sees the public side");
+    }
+
+    #[test]
     #[ignore = "live GitHub request"]
     fn live_news_fetch() {
         let t = std::time::Instant::now();
@@ -608,4 +614,15 @@ mod news_tests {
         );
         assert!(items[1].url.is_empty(), "only github.com links are shown");
     }
+}
+
+/// v0.3.2: this PC's public IPv4 as the internet sees it, from a plain-text echo service, for the
+/// Host tab's Internet mode (the address friends join and the router forwards to).
+pub fn public_ip() -> Result<std::net::Ipv4Addr> {
+    let url = Url::parse("https://api.ipify.org/")?;
+    let body = fetch_bytes(&url, 64, &AtomicBool::new(false))?;
+    std::str::from_utf8(&body)
+        .ok()
+        .and_then(|text| text.trim().parse().ok())
+        .ok_or_else(|| "The IP lookup answered something else.".to_owned())
 }

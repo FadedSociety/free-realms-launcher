@@ -189,6 +189,91 @@ impl Launcher {
         );
     }
 
+    /// Look up this PC's public IP in the background; the Host tab's field fills in when it answers.
+    fn lookup_public_ip(&mut self, ctx: &egui::Context) {
+        if self.ip_rx.is_some() || self.screenshot.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(osfr_launcher::release::public_ip().ok());
+            ctx.request_repaint();
+        });
+        self.ip_rx = Some(rx);
+    }
+
+    /// v0.3.2: the choices players expect back next time, in `%APPDATA%/FreeRealmsExpanded/launcher.json`.
+    fn prefs_path() -> Option<std::path::PathBuf> {
+        let appdata = std::path::PathBuf::from(std::env::var_os("APPDATA")?);
+        appdata
+            .is_absolute()
+            .then(|| appdata.join("FreeRealmsExpanded").join("launcher.json"))
+    }
+
+    fn prefs_json(&self) -> String {
+        serde_json::json!({
+            "client": self.client.trim(),
+            "host": self.host,
+            "host_internet": self.host_internet,
+            "host_public": self.host_public.trim(),
+        })
+        .to_string()
+    }
+
+    pub(super) fn load_prefs(&mut self) {
+        if self.screenshot.is_some() {
+            return;
+        }
+        let Some(text) = Self::prefs_path().and_then(|p| std::fs::read_to_string(p).ok()) else {
+            return;
+        };
+        let Ok(prefs) = serde_json::from_str::<serde_json::Value>(&text) else {
+            return;
+        };
+        let text_of = |key: &str| {
+            prefs
+                .get(key)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_owned()
+        };
+        self.client = text_of("client");
+        self.host_public = text_of("host_public");
+        self.host = prefs.get("host").and_then(|v| v.as_bool()).unwrap_or(false);
+        self.host_internet = self.host
+            && prefs
+                .get("host_internet")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+        if self.host && !self.host_internet {
+            self.host_choices = osfr_launcher::local::host_addresses();
+            self.host_address = self.host_choices.first().copied();
+        }
+        self.prefs_saved = self.prefs_json();
+    }
+
+    /// Write the remembered choices when they change (a small file, replaced in one rename).
+    pub(super) fn save_prefs(&mut self) {
+        if self.screenshot.is_some() {
+            return;
+        }
+        let json = self.prefs_json();
+        if json == self.prefs_saved {
+            return;
+        }
+        self.prefs_saved = json.clone();
+        if let Some(path) = Self::prefs_path() {
+            let temporary = path.with_extension("json.tmp");
+            let _ = path
+                .parent()
+                .map(std::fs::create_dir_all)
+                .unwrap_or(Ok(()))
+                .and_then(|()| std::fs::write(&temporary, json))
+                .and_then(|()| std::fs::rename(&temporary, &path));
+        }
+    }
+
     fn news_cards(&mut self, ui: &mut egui::Ui) {
         for item in self.news.clone() {
             let (card, response) =
@@ -729,6 +814,9 @@ impl Launcher {
             if response.clicked() {
                 self.host = index > 0;
                 self.host_internet = index == 2;
+                if index == 2 && self.host_public.trim().is_empty() {
+                    self.lookup_public_ip(ui.ctx());
+                }
                 if index == 1 && self.host_choices.is_empty() {
                     self.host_choices = osfr_launcher::local::host_addresses();
                     self.host_address = self.host_choices.first().copied();
@@ -761,9 +849,7 @@ impl Launcher {
                 )
                 .clicked()
                 {
-                    ui.ctx().open_url(egui::OpenUrl::new_tab(
-                        "https://duckduckgo.com/?q=what+is+my+ip",
-                    ));
+                    self.lookup_public_ip(ui.ctx());
                 }
             });
             let ports = format!(

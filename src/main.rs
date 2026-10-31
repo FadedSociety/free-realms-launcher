@@ -565,6 +565,10 @@ pub(crate) struct Launcher {
     host_page: bool,
     /// v0.3.1: the realm chooser over the hero scene (Change).
     realm_popup: bool,
+    /// v0.3.2: the public IP lookup running for the Host tab.
+    ip_rx: Option<mpsc::Receiver<Option<std::net::Ipv4Addr>>>,
+    /// v0.3.2: the remembered choices as last written to launcher.json.
+    prefs_saved: String,
     /// The window size (native points) the zoom was last fitted to.
     fit_size: Vec2,
     /// v0.3.1: the release whose full notes show over the launcher.
@@ -657,6 +661,8 @@ impl Launcher {
             settings_page,
             host_page: false,
             realm_popup: false,
+            ip_rx: None,
+            prefs_saved: String::new(),
             fit_size: Vec2::ZERO,
             news_open: None,
             notes_preview: false,
@@ -1594,6 +1600,14 @@ impl eframe::App for Launcher {
                 theme::set_fonts(ctx, font);
             }
         }
+        if let Some(Ok(ip)) = self.ip_rx.as_ref().map(|rx| rx.try_recv()) {
+            self.ip_rx = None;
+            match ip {
+                Some(ip) => self.host_public = ip.to_string(),
+                None => self.message = "Could not look up your public IP; type it in.".into(),
+            }
+        }
+        self.save_prefs();
         if let Some(Ok(items)) = self.news_rx.as_ref().map(|rx| rx.try_recv()) {
             if self.notes_preview {
                 self.news_open = items.first().cloned();
@@ -1852,6 +1866,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 test_vine_growth,
             )
             .map_err(std::io::Error::other)?;
+            launcher.load_prefs();
             launcher.patch_preview = patch_preview;
             launcher.host_page = host_page;
             launcher.notes_preview = notes_preview;

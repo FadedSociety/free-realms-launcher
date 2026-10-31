@@ -179,8 +179,11 @@ pub fn validate_endpoint(value: &str) -> Result<()> {
     Ok(())
 }
 
-fn io_error(_: io::Error) -> String {
+fn io_error(error: io::Error) -> String {
     // Local paths and auth-bearing batch/config contents do not enter UI logs.
+    if error.kind() == io::ErrorKind::NotFound {
+        return "A client file is missing. Download the client again in Settings to repair it.".into();
+    }
     "Client file operation failed. Check folder permissions and available disk space.".into()
 }
 
@@ -277,6 +280,20 @@ fn bounded_read(path: &Path, limit: u64) -> Result<Vec<u8>> {
         return Err("Client configuration or locale file exceeds its size limit.".into());
     }
     Ok(bytes)
+}
+
+/// The community host's client has no UserOptions.ini (the game writes its own on first run) and no
+/// FreeRealms.bat. The launcher starts from these, which hold only what it sets and passes on.
+const DEFAULT_OPTIONS: &str = "[Display]\nWindowedWidth=1280\nWindowedHeight=720\nMode=Windowed\nMaximized=0\n\n[Sound]\nMaster=1.000000\n";
+const DEFAULT_BATCH: &str =
+    "start /min FreeRealms.exe inifile=ClientConfig.ini ShowMemberLoadingScreen=0 Country=US\n";
+
+/// A client config file, or `fallback` when the client has none at all.
+fn text_or(root: &Path, name: &str, fallback: &str) -> Result<String> {
+    match fs::symlink_metadata(root.join(name)) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(fallback.to_owned()),
+        _ => text(root, name),
+    }
 }
 
 fn text(root: &Path, name: &str) -> Result<String> {
@@ -475,7 +492,7 @@ impl LaunchPlan {
             "IndirectServerAddress",
             &assets.url,
         )?;
-        let mut options = text(&root, "UserOptions.ini")?;
+        let mut options = text_or(&root, "UserOptions.ini", DEFAULT_OPTIONS)?;
         for (key, value) in [
             ("WindowedWidth", settings.width.to_string()),
             ("WindowedHeight", settings.height.to_string()),
@@ -529,7 +546,7 @@ impl LaunchPlan {
             .as_nanos();
         let backup = parent.join(format!("w86-{stamp}-{}", std::process::id()));
         let arguments = launch_arguments(
-            &text(&root, "FreeRealms.bat")?,
+            &text_or(&root, "FreeRealms.bat", DEFAULT_BATCH)?,
             endpoint,
             login.session(endpoint)?,
         )?;

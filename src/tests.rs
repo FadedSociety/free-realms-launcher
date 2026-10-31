@@ -618,3 +618,28 @@ fn the_portrait_upload_points_at_the_realms_gateway() {
         );
     }
 }
+
+#[test]
+fn a_client_without_options_or_batch_still_prepares() {
+    // The community host's client ships without UserOptions.ini and FreeRealms.bat (2026-10-31).
+    let scratch = Scratch::new();
+    fs::remove_file(scratch.0.join("UserOptions.ini")).unwrap();
+    fs::remove_file(scratch.0.join("FreeRealms.bat")).unwrap();
+    let plan = LaunchPlan::build(
+        &scratch.0,
+        "127.0.0.1:20042",
+        None,
+        LaunchSettings {
+            width: 1280,
+            height: 720,
+        },
+        &mut LocalLoginStub,
+    )
+    .unwrap();
+    assert!(plan.arguments.contains(&"inifile=Baseline.ini".to_owned()));
+    assert!(plan.arguments.contains(&"Country=US".to_owned()));
+    plan.apply().unwrap();
+    let options = fs::read_to_string(scratch.0.join("UserOptions.ini")).unwrap();
+    assert!(options.contains("WindowedWidth=1280\nWindowedHeight=720"));
+    assert!(options.contains("Mode=Windowed\nMaximized=0"));
+}
