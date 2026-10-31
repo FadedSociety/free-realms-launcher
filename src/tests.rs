@@ -654,6 +654,15 @@ fn a_community_client_keeps_its_local_assets() {
         "Server=old:20042\nIndirectServerAddress=file://./manifest\nAddress=lvsadp-old\n",
     )
     .unwrap();
+    let refused = LaunchPlan::build(
+        &scratch.0,
+        "127.0.0.1:20042",
+        None,
+        LaunchSettings::default(),
+        &mut LocalLoginStub,
+    );
+    assert!(refused.is_err(), "no world packs: a clear refusal, not a crash at asset init");
+    fs::write(scratch.0.join("AssetsW_000.pack"), b"world fixture").unwrap();
     let plan = LaunchPlan::build(
         &scratch.0,
         "127.0.0.1:20042",

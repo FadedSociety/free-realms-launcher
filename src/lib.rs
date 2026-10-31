@@ -495,8 +495,10 @@ impl LaunchPlan {
         // Read locally, the world (AssetsW_*.pack, geometry and zone music) must be on disk; without
         // it the game stops at asset init with code 27. The community download lacks those packs.
         if local_assets && !root.join("AssetsW_000.pack").is_file() {
-            return Err("This client has no world files (AssetsW_*.pack). Use a full Free Realms client                         folder in Settings."
-                .into());
+            return Err(
+                "This client has no world files (AssetsW_*.pack). Use a full Free Realms client folder."
+                    .into(),
+            );
         }
         let assets = if local_assets {
             None
