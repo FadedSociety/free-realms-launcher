@@ -269,8 +269,11 @@ fn start_local(
     // Enroll before the servers start: in account-store mode osfr-login refuses a missing store
     // and never creates one from network input. The profile keeps only the fixed local broker.
     let broker = format!("127.0.0.1:{}", osfr_launcher::local::BROKER_PORT);
+    // v0.3.2: the markers live with the profile, the store with this server install. A new install
+    // folder (or a removed server/state) has no store yet, so enroll and make admin again.
+    let fresh_store = !local.account_store().is_file();
     let enrolled = realm_dir.join("enrolled");
-    if !enrolled.is_file() {
+    if fresh_store || !enrolled.is_file() {
         let public_key = match auth::load_profile(LOCAL_PROFILE) {
             Ok(_) => auth::print_public_key(LOCAL_PROFILE).map_err(auth_error_message)?,
             Err(_) => {
@@ -295,7 +298,7 @@ fn start_local(
     // L070: this PC's own account is the realm's admin, once. ponytail: a marker from before
     // L070 holds no id; the launcher's enrollment made the store, so its account is id 1.
     let admin = realm_dir.join("admin");
-    if !admin.is_file() {
+    if fresh_store || !admin.is_file() {
         let id = std::fs::read_to_string(&enrolled)
             .ok()
             .and_then(|id| id.trim().parse().ok())
