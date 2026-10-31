@@ -755,9 +755,13 @@ impl Launcher {
             self.message = "Finish verifying the selected realm's patch before playing.".into();
             return;
         }
-        if self.client.trim().is_empty() {
+        if !client_folder_ok(&self.client) {
             self.settings_page = true;
-            self.message = "Choose the client folder before playing.".into();
+            self.message = if self.client.trim().is_empty() {
+                "Choose the client folder before playing.".into()
+            } else {
+                "The client folder has no FreeRealms.exe (moved or not downloaded). Choose it again, or download the client.".into()
+            };
             return;
         }
         let client = PathBuf::from(&self.client);
@@ -872,9 +876,13 @@ impl Launcher {
             };
             local.host = Some(address);
         }
-        if self.client.trim().is_empty() {
+        if !client_folder_ok(&self.client) {
             self.settings_page = true;
-            self.message = "Choose the client folder before playing.".into();
+            self.message = if self.client.trim().is_empty() {
+                "Choose the client folder before playing.".into()
+            } else {
+                "The client folder has no FreeRealms.exe (moved or not downloaded). Choose it again, or download the client.".into()
+            };
             return;
         }
         let client = PathBuf::from(&self.client);
@@ -2536,6 +2544,11 @@ mod tests {
         drop(_owned);
         std::fs::remove_file(path).unwrap();
     }
+}
+
+/// The folder holds the game (a moved or half-downloaded folder does not).
+pub(crate) fn client_folder_ok(client: &str) -> bool {
+    !client.trim().is_empty() && Path::new(client.trim()).join("FreeRealms.exe").is_file()
 }
 
 /// Server browser: the realm's listing key file (32 random bytes, made once beside the local realm).

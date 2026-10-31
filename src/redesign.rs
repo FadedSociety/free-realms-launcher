@@ -253,6 +253,13 @@ impl Launcher {
                 .to_owned()
         };
         self.client = text_of("client");
+        // v0.3.4: a moved launcher folder takes its own client/ when the saved one is gone.
+        if let Some(beside) = self.launcher_dir.as_ref().map(|root| root.join("client")) {
+            let beside = beside.display().to_string();
+            if !client_folder_ok(&self.client) && client_folder_ok(&beside) {
+                self.client = beside;
+            }
+        }
         self.host_public = text_of("host_public");
         self.list_realm = prefs
             .get("list_realm")
@@ -1282,7 +1289,7 @@ impl Launcher {
             .is_some_and(|root| LocalSettings::packaged(root).missing().is_empty());
         let ip = self.host_public.trim().to_owned();
         let ip_ok = ip.parse::<std::net::IpAddr>().is_ok();
-        let client_ok = !self.client.trim().is_empty();
+        let client_ok = client_folder_ok(&self.client);
         // Each row: passed, what it checks, and what it found (or what to do).
         let rows = [
             (
