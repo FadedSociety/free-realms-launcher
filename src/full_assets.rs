@@ -24,7 +24,7 @@ use crate::{
     patch::{self, PatchReport, Progress, Url},
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
@@ -48,6 +48,11 @@ const WORKERS: usize = 6;
 /// (R) The largest asset is about 11 MB; the manifest about 9.5 MB.
 const ASSET_LIMIT: u64 = 64 * 1024 * 1024;
 const PART: &str = "osfr-part";
+/// The rows the CDN answered 404 for, kept beside the packs so a rerun does not ask again (about
+/// 37,000 of the manifest's rows are not on the community host; the game cannot get them either).
+/// The first line is the crc of the manifest they were checked against: a new manifest checks
+/// them all again.
+const UNAVAILABLE: &str = "osfr-unavailable.txt";
 
 /// One manifest row: the name the CDN serves (`wire`, `.z` = the A1B2C3D4 envelope), the plain
 /// name the packs hold, the raw crc, and the size column (raw for a plain row, compressed for `.z`).
@@ -374,8 +379,37 @@ fn manifest(client: &Path, cancel: &AtomicBool) -> Result<Vec<u8>> {
     fs::read(&local).map_err(|_| error)
 }
 
+/// The wire names a run under the same manifest found missing on the CDN.
+fn unavailable(client: &Path, manifest_crc: u32) -> HashSet<String> {
+    let Ok(text) = fs::read_to_string(client.join(UNAVAILABLE)) else {
+        return HashSet::new();
+    };
+    let mut lines = text.lines();
+    if lines.next() != Some(manifest_crc.to_string().as_str()) {
+        return HashSet::new();
+    }
+    lines.map(str::to_owned).collect()
+}
+
+fn remember_unavailable<'a>(
+    client: &Path,
+    manifest_crc: u32,
+    wires: impl Iterator<Item = &'a str>,
+) -> Result<()> {
+    let mut text = format!("{manifest_crc}\n");
+    for wire in wires {
+        text.push_str(wire);
+        text.push('\n');
+    }
+    let path = client.join(UNAVAILABLE);
+    let part = path.with_extension(format!("txt.{PART}"));
+    fs::write(&part, text).map_err(|e| e.to_string())?;
+    fs::rename(&part, &path).map_err(|e| e.to_string())
+}
+
 /// Install every manifest asset the client cannot already see (see the module docs). A rerun
-/// installs only what is still missing, so a cancelled or failed install resumes.
+/// installs only what is still missing, so a cancelled or failed install resumes; rows the CDN
+/// did not have under this manifest are not asked for again.
 pub fn install(
     client: &Path,
     cancel: &AtomicBool,
@@ -391,11 +425,17 @@ pub fn install(
         }
     }
     let manifest = manifest(client, cancel)?;
+    let manifest_crc = crc32(&manifest);
+    let mut gone = unavailable(client, manifest_crc);
     let held = held(client);
-    let mut conflicts = 0;
+    let (mut conflicts, mut known_gone) = (0, 0);
     let missing: Vec<Row> = rows(&String::from_utf8_lossy(&manifest))
         .into_iter()
         .filter(|row| match held.get(&row.name.to_ascii_uppercase()) {
+            None if gone.contains(&row.wire) => {
+                known_gone += 1;
+                false
+            }
             None => true,
             Some(crcs) if crcs.contains(&row.crc) => false,
             // A visible copy with another crc cannot be shadowed safely (asset-install.md Q1).
@@ -462,7 +502,10 @@ pub fn install(
                     report.files_downloaded += 1;
                     report.bytes_downloaded += raw.len() as u64;
                 }
-                Ok(None) => report.unavailable += 1,
+                Ok(None) => {
+                    report.unavailable += 1;
+                    gone.insert(row.wire.clone());
+                }
                 Err(_) if cancel.load(Ordering::SeqCst) => {}
                 Err(_) => failed += 1,
             }
@@ -472,10 +515,12 @@ pub fn install(
     });
     // What arrived is published even after a cancel or an error, so the next run resumes after it.
     let finished = pack.map(PackOut::finish).transpose();
+    let remembered = remember_unavailable(client, manifest_crc, gone.iter().map(String::as_str));
     written?;
     finished?;
+    remembered?;
     patch::cancelled(cancel)?;
-    report.unavailable += conflicts;
+    report.unavailable += conflicts + known_gone;
     if failed > 0 {
         return Err(format!(
             "{failed} game assets could not be downloaded. Download again to finish."
@@ -539,6 +584,19 @@ mod tests {
 
     /// Thousands of entries: every one must be visible through the client's 8,192-byte window, and
     /// the pack lands after the existing read-only ones.
+    #[test]
+    fn missing_rows_are_remembered_for_their_manifest_only() {
+        let client = scratch("full-assets-unavailable");
+        assert!(unavailable(&client, 7).is_empty());
+        remember_unavailable(&client, 7, ["a.dds.z", "b.mp3"].into_iter()).unwrap();
+        let gone = unavailable(&client, 7);
+        assert!(gone.contains("a.dds.z") && gone.contains("b.mp3") && gone.len() == 2);
+        assert!(
+            unavailable(&client, 8).is_empty(),
+            "a new manifest checks them again"
+        );
+    }
+
     #[test]
     fn a_big_pack_keeps_every_entry_visible() {
         let client = scratch("full-assets");
