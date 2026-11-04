@@ -60,8 +60,7 @@ fn flip_title(movie: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// A file from the client's `Assets_*.pack` chain: big-endian chunks of (next chunk, count), then
-/// per entry name length, name, offset, length, crc.
+/// A file from the client's `Assets_*.pack` chain.
 pub(crate) fn pack_entry(client: &Path, wanted: &str) -> io::Result<Option<Vec<u8>>> {
     let mut packs: Vec<_> = fs::read_dir(client)?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
@@ -72,41 +71,56 @@ pub(crate) fn pack_entry(client: &Path, wanted: &str) -> io::Result<Option<Vec<u
         })
         .collect();
     packs.sort();
-    let invalid = |what: &str| io::Error::new(io::ErrorKind::InvalidData, what.to_owned());
     for pack in packs {
-        let mut file = BufReader::new(File::open(&pack)?);
-        let mut chunk = 0u64;
-        loop {
-            file.seek(SeekFrom::Start(chunk))?;
-            let (next, count) = (be(&mut file)?, be(&mut file)?);
-            if count > 100_000 {
-                return Err(invalid("pack chunk lists too many files"));
+        let found = entries(&pack)?
+            .into_iter()
+            .find(|(name, ..)| name == wanted.as_bytes());
+        if let Some((_, offset, size, _)) = found {
+            if size > MOVIE_LIMIT {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "pack entry too large",
+                ));
             }
-            for _ in 0..count {
-                let length = be(&mut file)? as usize;
-                if length > 1024 {
-                    return Err(invalid("pack entry name too long"));
-                }
-                let mut name = vec![0; length];
-                file.read_exact(&mut name)?;
-                let (offset, size, _crc) = (be(&mut file)?, be(&mut file)?, be(&mut file)?);
-                if name == wanted.as_bytes() {
-                    if size > MOVIE_LIMIT {
-                        return Err(invalid("pack entry too large"));
-                    }
-                    file.seek(SeekFrom::Start(offset.into()))?;
-                    let mut body = vec![0; size as usize];
-                    file.read_exact(&mut body)?;
-                    return Ok(Some(body));
-                }
-            }
-            if next == 0 || u64::from(next) <= chunk {
-                break;
-            }
-            chunk = next.into();
+            let mut file = File::open(&pack)?;
+            file.seek(SeekFrom::Start(offset.into()))?;
+            let mut body = vec![0; size as usize];
+            file.read_exact(&mut body)?;
+            return Ok(Some(body));
         }
     }
     Ok(None)
+}
+
+/// One pack index entry: (name, offset, length, crc).
+pub(crate) type PackEntry = (Vec<u8>, u32, u32, u32);
+
+/// Every entry of one pack: big-endian chunks of (next chunk,
+/// count), then per entry name length, name, offset, length, crc.
+pub(crate) fn entries(pack: &Path) -> io::Result<Vec<PackEntry>> {
+    let invalid = |what: &str| io::Error::new(io::ErrorKind::InvalidData, what.to_owned());
+    let mut file = BufReader::new(File::open(pack)?);
+    let (mut chunk, mut out) = (0u64, Vec::new());
+    loop {
+        file.seek(SeekFrom::Start(chunk))?;
+        let (next, count) = (be(&mut file)?, be(&mut file)?);
+        if count > 100_000 {
+            return Err(invalid("pack chunk lists too many files"));
+        }
+        for _ in 0..count {
+            let length = be(&mut file)? as usize;
+            if length > 1024 {
+                return Err(invalid("pack entry name too long"));
+            }
+            let mut name = vec![0; length];
+            file.read_exact(&mut name)?;
+            out.push((name, be(&mut file)?, be(&mut file)?, be(&mut file)?));
+        }
+        if next == 0 || u64::from(next) <= chunk {
+            return Ok(out);
+        }
+        chunk = next.into();
+    }
 }
 
 fn be(reader: &mut impl Read) -> io::Result<u32> {

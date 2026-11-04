@@ -233,24 +233,36 @@ fn pack_file(client: &Path, name: &str) -> Result<Vec<u8>> {
 
 /// A one-chunk pack: the index, padded to 8 KiB, then each file.
 fn write_pack(assets: &[(String, Vec<u8>)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    write_pack_to(&mut out, assets).expect("writing to a Vec cannot fail");
+    out
+}
+
+/// One pack chunk in the client's layout: the index (big-endian next chunk 0, count, then per
+/// entry name length, name, offset, length, crc), zero-padded to [`ALIGNMENT`], then the bodies.
+pub(crate) fn write_pack_to(
+    out: &mut impl std::io::Write,
+    assets: &[(String, Vec<u8>)],
+) -> std::io::Result<()> {
     let index_size = 8 + assets.iter().map(|(n, _)| 4 + n.len() + 12).sum::<usize>();
     let mut offset = index_size.max(ALIGNMENT);
-    let mut out = Vec::with_capacity(offset + assets.iter().map(|(_, d)| d.len()).sum::<usize>());
-    out.extend(0u32.to_be_bytes());
-    out.extend((assets.len() as u32).to_be_bytes());
+    let mut index = Vec::with_capacity(offset);
+    index.extend(0u32.to_be_bytes());
+    index.extend((assets.len() as u32).to_be_bytes());
     for (name, data) in assets {
-        out.extend((name.len() as u32).to_be_bytes());
-        out.extend(name.as_bytes());
-        out.extend((offset as u32).to_be_bytes());
-        out.extend((data.len() as u32).to_be_bytes());
-        out.extend(crc32(data).to_be_bytes());
+        index.extend((name.len() as u32).to_be_bytes());
+        index.extend(name.as_bytes());
+        index.extend((offset as u32).to_be_bytes());
+        index.extend((data.len() as u32).to_be_bytes());
+        index.extend(crc32(data).to_be_bytes());
         offset += data.len();
     }
-    out.resize(index_size.max(ALIGNMENT), 0);
+    index.resize(index_size.max(ALIGNMENT), 0);
+    out.write_all(&index)?;
     for (_, data) in assets {
-        out.extend(data);
+        out.write_all(data)?;
     }
-    out
+    Ok(())
 }
 
 /// Add `script` (complete DoAction tag records) after the stock DoAction of `frame`, before that
@@ -338,7 +350,7 @@ fn replace_bytes(data: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
 }
 
 /// Standard CRC-32 (the manifest's and the pack index's).
-fn crc32(bytes: &[u8]) -> u32 {
+pub(crate) fn crc32(bytes: &[u8]) -> u32 {
     let table: [u32; 256] = std::array::from_fn(|n| {
         (0..8).fold(n as u32, |c, _| {
             (c >> 1) ^ (0xEDB8_8320 & (c & 1).wrapping_neg())

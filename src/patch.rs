@@ -40,6 +40,8 @@ pub struct Progress {
 pub struct PatchReport {
     pub files_downloaded: usize,
     pub bytes_downloaded: u64,
+    /// Full asset install: manifest rows the community host does not have (HTTP 404).
+    pub unavailable: usize,
 }
 
 /// `tag` and `asset` are used by the GitHub release flow (`release.rs`) only.
@@ -353,6 +355,23 @@ pub(crate) fn fetch_bytes(url: &Url, limit: u64, cancel: &AtomicBool) -> Result<
         ));
     }
     read_manifest(&mut response, limit, cancel)
+}
+
+/// GET one community asset: `None` when the host does not have it (404), else the body (200 only,
+/// at most `limit` bytes).
+pub(crate) fn fetch_optional(
+    url: &Url,
+    limit: u64,
+    cancel: &AtomicBool,
+) -> Result<Option<Vec<u8>>> {
+    let mut response = fetch(url, 0)?;
+    if response.status == 404 {
+        return Ok(None);
+    }
+    if response.status != 200 || response.length.is_some_and(|n| n > limit) {
+        return Err(format!("The asset host answered HTTP {}.", response.status));
+    }
+    read_manifest(&mut response, limit, cancel).map(Some)
 }
 
 /// The asset Responder's pass-through: one GET whose body is streamed; 200 with a length only.

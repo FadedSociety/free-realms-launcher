@@ -14,8 +14,9 @@ use osfr_launcher::{
     LaunchPlan, LaunchSettings, LocalLoginStub, LoginProvider, SessionToken,
     assets::Responder,
     auth::{self, AuthError},
+    full_assets,
     local::{LOCAL_HANDLE, LocalRealm, LocalSettings},
-    patch::{self, PatchSource, Progress},
+    patch::{self, PatchReport, PatchSource, Progress},
     release::{self, ReleaseSource},
 };
 use std::{
@@ -1004,11 +1005,21 @@ impl Launcher {
         let (sender, result) = mpsc::channel();
         let (target, stopping, state) = (folder.clone(), cancel.clone(), progress.clone());
         std::thread::spawn(move || {
-            let outcome = patch::download_client(&target, &stopping, |p| {
+            let mut update = |p: &Progress| {
                 if let Ok(mut state) = state.lock() {
                     *state = p.clone();
                 }
-            });
+            };
+            // Owner 2026-11-04: every game asset is installed now, none streamed in play.
+            let outcome =
+                patch::download_client(&target, &stopping, &mut update).and_then(|client| {
+                    let assets = full_assets::install(&target, &stopping, &mut update)?;
+                    Ok(PatchReport {
+                        files_downloaded: client.files_downloaded + assets.files_downloaded,
+                        bytes_downloaded: client.bytes_downloaded + assets.bytes_downloaded,
+                        unavailable: assets.unavailable,
+                    })
+                });
             let _ = sender.send(outcome);
         });
         self.message = "Fetching the client list from the community host...".into();
@@ -1028,8 +1039,13 @@ impl Launcher {
             Ok(Ok(report)) => {
                 self.client = job.folder.display().to_string();
                 self.message = format!(
-                    "Client ready in {} ({} files downloaded).",
-                    self.client, report.files_downloaded
+                    "Client ready in {} ({} files downloaded{}).",
+                    self.client,
+                    report.files_downloaded,
+                    match report.unavailable {
+                        0 => String::new(),
+                        n => format!("; {n} listed game files are not on the community host"),
+                    }
                 );
                 self.client_job = None;
             }
