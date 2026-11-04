@@ -1025,10 +1025,57 @@ mod native {
             }
         }
     }
+    /// One WinHTTP session for the whole process. Its connection pool keeps TLS connections alive
+    /// between requests: a session per request paid a new handshake for each of the full asset
+    /// install's ~100k files (measured about 300 ms per small file against 165 ms reused).
+    struct Session(Handle);
+    // SAFETY: WinHTTP session handles may be shared by synchronous requests on several threads;
+    // this one is created once, configured before it is shared, and never closed.
+    unsafe impl Send for Session {}
+    unsafe impl Sync for Session {}
+    fn session() -> Result<Handle> {
+        static SESSION: std::sync::OnceLock<std::result::Result<Session, String>> =
+            std::sync::OnceLock::new();
+        match SESSION.get_or_init(open_session) {
+            Ok(session) => Ok(session.0),
+            Err(error) => Err(error.clone()),
+        }
+    }
+    fn open_session() -> std::result::Result<Session, String> {
+        // SAFETY: the agent string is NUL terminated and lives through the call; the options
+        // point at live u32 values of the stated size.
+        unsafe {
+            let session = Internet::new(WinHttpOpen(
+                wide("FreeRealmsExpanded/patch-v1").as_ptr(),
+                1,
+                null(),
+                null(),
+                0,
+            ))?;
+            if WinHttpSetTimeouts(session.0, 3000, 3000, 3000, 3000) == 0 {
+                return Err("Could not set patch timeouts.".into());
+            }
+            // RECEIVE_RESPONSE_TIMEOUT bounds all headers, even when a peer
+            // trickles bytes inside the ordinary per-read timeout. Cap total
+            // headers too, before WinHTTP buffers the response.
+            for (option, value) in [(7, 3000_u32), (91, 8192_u32)] {
+                if WinHttpSetOption(session.0, option, (&value as *const u32).cast(), 4) == 0 {
+                    return Err("Could not bound patch response headers.".into());
+                }
+            }
+            // Explicit TLS 1.2 minimum. TLS 1.3 can be enabled after fresh-PC acceptance.
+            let tls12 = 0x800_u32;
+            if WinHttpSetOption(session.0, 84, (&tls12 as *const u32).cast(), 4) == 0 {
+                return Err("Could not configure patch TLS.".into());
+            }
+            let handle = session.0;
+            std::mem::forget(session);
+            Ok(Session(handle))
+        }
+    }
     pub(super) struct Response {
         request: Internet,
         _connection: Internet,
-        _session: Internet,
         pub status: u32,
         /// `None` when the server sent no Content-Length (chunked); downloads refuse that.
         pub length: Option<u64>,
@@ -1071,35 +1118,14 @@ mod native {
 
     /// GET, or POST with a JSON body (the server browser directory).
     pub(super) fn send(url: &Url, offset: u64, body: Option<&[u8]>) -> Result<Response> {
+        let session = session()?;
         // SAFETY: all UTF-16 inputs are NUL terminated and live through each
-        // synchronous call. Handles are owned in dependency order by Response.
+        // synchronous call. Response owns the connection and request handles in
+        // dependency order; the session is the process-wide one, never closed.
         // No certificate validation flags are disabled; TLS belongs to WinHTTP.
         unsafe {
-            let session = Internet::new(WinHttpOpen(
-                wide("FreeRealmsExpanded/patch-v1").as_ptr(),
-                1,
-                null(),
-                null(),
-                0,
-            ))?;
-            if WinHttpSetTimeouts(session.0, 3000, 3000, 3000, 3000) == 0 {
-                return Err("Could not set patch timeouts.".into());
-            }
-            // RECEIVE_RESPONSE_TIMEOUT bounds all headers, even when a peer
-            // trickles bytes inside the ordinary per-read timeout. Cap total
-            // headers too, before WinHTTP buffers the response.
-            for (option, value) in [(7, 3000_u32), (91, 8192_u32)] {
-                if WinHttpSetOption(session.0, option, (&value as *const u32).cast(), 4) == 0 {
-                    return Err("Could not bound patch response headers.".into());
-                }
-            }
-            // Explicit TLS 1.2 minimum. TLS 1.3 can be enabled after fresh-PC acceptance.
-            let tls12 = 0x800_u32;
-            if WinHttpSetOption(session.0, 84, (&tls12 as *const u32).cast(), 4) == 0 {
-                return Err("Could not configure patch TLS.".into());
-            }
             let connection = Internet::new(WinHttpConnect(
-                session.0,
+                session,
                 wide(&url.host).as_ptr(),
                 url.port,
                 0,
@@ -1158,7 +1184,6 @@ mod native {
             Ok(Response {
                 request,
                 _connection: connection,
-                _session: session,
                 status,
                 length,
                 range,
