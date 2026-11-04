@@ -16,7 +16,7 @@
 //!   past that window is invisible. Each block here is filled while `8192 - used > 16 + name length`
 //!   and padded to 8,192 bytes. Block 0 sits at offset 0, the data follows, further blocks are
 //!   appended after the data, each `next` the absolute offset of the next block.
-//! - Offsets are signed 32-bit: a pack stays under 1.5 GB (the client's own deterministic limit).
+//! - Offsets are signed 32-bit: a pack must stay under 1.5 GB (the client's deterministic limit).
 //! - Names compare case-insensitively; a `.z` row is stored raw under the name without `.z`.
 use crate::{
     Result,
@@ -41,8 +41,9 @@ const ASSETS: &str = "https://osfr.editz.dev/assets";
 const MANIFEST: &str = "Assets_manifest.txt";
 const ENVELOPE: u32 = 0xA1B2C3D4;
 const BLOCK: u64 = 8192;
-/// The client's own limit for deterministic packs (offsets are signed 32-bit).
-const PACK_LIMIT: u64 = 1_500_000_000;
+/// A pack is published at this size. The client's own limit is 1.5 GB (offsets are signed 32-bit);
+/// a smaller pack loses less to a crash or a killed launcher, since only published packs survive.
+const PACK_LIMIT: u64 = 500_000_000;
 /// (R) Parallel downloads; the CDN is a volunteer host.
 const WORKERS: usize = 6;
 /// (R) The largest asset is about 11 MB; the manifest about 9.5 MB.
@@ -505,6 +506,11 @@ pub fn install(
                 Ok(None) => {
                     report.unavailable += 1;
                     gone.insert(row.wire.clone());
+                    // Saved as it grows, so a crash does not cost the walk through them again.
+                    if report.unavailable % 1000 == 0 {
+                        let wires = gone.iter().map(String::as_str);
+                        remember_unavailable(client, manifest_crc, wires)?;
+                    }
                 }
                 Err(_) if cancel.load(Ordering::SeqCst) => {}
                 Err(_) => failed += 1,
