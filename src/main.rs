@@ -89,11 +89,16 @@ struct PatchJob {
     result: mpsc::Receiver<Result<patch::PatchReport, String>>,
 }
 
+/// The client download's report, then the full asset install's.
+type ClientOutcome = Result<(PatchReport, Result<PatchReport, String>), String>;
+
 /// L070: the client download from the community host, running off the UI thread.
 struct ClientJob {
     folder: PathBuf,
     cancel: Arc<AtomicBool>,
-    result: mpsc::Receiver<Result<patch::PatchReport, String>>,
+    /// The client download, then the full asset install (a failed install still leaves a
+    /// playable client: the game streams what is missing).
+    result: mpsc::Receiver<ClientOutcome>,
     progress: Arc<Mutex<Progress>>,
 }
 
@@ -1011,15 +1016,12 @@ impl Launcher {
                 }
             };
             // Owner 2026-11-04: every game asset is installed now, none streamed in play.
-            let outcome =
-                patch::download_client(&target, &stopping, &mut update).and_then(|client| {
-                    let assets = full_assets::install(&target, &stopping, &mut update)?;
-                    Ok(PatchReport {
-                        files_downloaded: client.files_downloaded + assets.files_downloaded,
-                        bytes_downloaded: client.bytes_downloaded + assets.bytes_downloaded,
-                        unavailable: assets.unavailable,
-                    })
-                });
+            let outcome = patch::download_client(&target, &stopping, &mut update).map(|client| {
+                (
+                    client,
+                    full_assets::install(&target, &stopping, &mut update),
+                )
+            });
             let _ = sender.send(outcome);
         });
         self.message = "Fetching the client list from the community host...".into();
@@ -1036,17 +1038,23 @@ impl Launcher {
             return;
         };
         match job.result.try_recv() {
-            Ok(Ok(report)) => {
+            Ok(Ok((client, assets))) => {
                 self.client = job.folder.display().to_string();
-                self.message = format!(
-                    "Client ready in {} ({} files downloaded{}).",
-                    self.client,
-                    report.files_downloaded,
-                    match report.unavailable {
-                        0 => String::new(),
-                        n => format!("; {n} listed game files are not on the community host"),
-                    }
-                );
+                self.message = match assets {
+                    Ok(assets) => format!(
+                        "Client ready in {} ({} files downloaded{}).",
+                        self.client,
+                        client.files_downloaded + assets.files_downloaded,
+                        match assets.unavailable {
+                            0 => String::new(),
+                            n => format!("; {n} listed game files are not on the community host"),
+                        }
+                    ),
+                    Err(error) => format!(
+                        "Client ready in {}, but some game files are not installed yet: {error} Until then the game fetches them while you play.",
+                        self.client
+                    ),
+                };
                 self.client_job = None;
             }
             Ok(Err(error)) => {

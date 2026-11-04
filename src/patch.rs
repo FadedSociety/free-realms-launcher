@@ -362,6 +362,7 @@ pub(crate) fn fetch_bytes(url: &Url, limit: u64, cancel: &AtomicBool) -> Result<
 pub(crate) fn fetch_optional(
     url: &Url,
     limit: u64,
+    time: Duration,
     cancel: &AtomicBool,
 ) -> Result<Option<Vec<u8>>> {
     let mut response = fetch(url, 0)?;
@@ -371,7 +372,7 @@ pub(crate) fn fetch_optional(
     if response.status != 200 || response.length.is_some_and(|n| n > limit) {
         return Err(format!("The asset host answered HTTP {}.", response.status));
     }
-    read_manifest(&mut response, limit, cancel).map(Some)
+    read_body(&mut response, limit, time, cancel).map(Some)
 }
 
 /// The asset Responder's pass-through: one GET whose body is streamed; 200 with a length only.
@@ -404,7 +405,17 @@ fn read_manifest(
     limit: u64,
     cancel: &AtomicBool,
 ) -> Result<Vec<u8>> {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    read_body(response, limit, Duration::from_secs(30), cancel)
+}
+
+/// Read a whole body within `time` (the full asset install sizes it per file).
+fn read_body(
+    response: &mut native::Response,
+    limit: u64,
+    time: Duration,
+    cancel: &AtomicBool,
+) -> Result<Vec<u8>> {
+    let deadline = Instant::now() + time;
     let mut bytes = Vec::new();
     let mut buffer = [0; 16 * 1024];
     loop {
