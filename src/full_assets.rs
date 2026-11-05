@@ -44,13 +44,16 @@ const BLOCK: u64 = 8192;
 /// A pack is published at this size. The client's own limit is 1.5 GB (offsets are signed 32-bit);
 /// a smaller pack loses less to a crash or a killed launcher, since only published packs survive.
 const PACK_LIMIT: u64 = 500_000_000;
-/// (R) Parallel downloads; the CDN is a volunteer host.
-const WORKERS: usize = 6;
+/// (R) Parallel downloads. Small files are bound by round trips, not bandwidth: measured 29 files/s
+/// at 6, 60 at 12 and 110 at 24, on files the CDN edge may have cached. The origin is a volunteer
+/// host, so this stays well under what it could take.
+const WORKERS: usize = 16;
 /// (R) The largest asset is about 11 MB; the manifest about 9.5 MB.
 const ASSET_LIMIT: u64 = 64 * 1024 * 1024;
 const PART: &str = "osfr-part";
-/// The rows the CDN answered 404 for, kept beside the packs so a rerun does not ask again (about
-/// 37,000 of the manifest's rows are not on the community host; the game cannot get them either).
+/// The rows the CDN cannot supply, kept beside the packs so a rerun does not ask again: about
+/// 36,000 of the manifest's rows answer 404 and a few hold another version, and the game cannot
+/// use those either.
 /// The first line is the crc of the manifest they were checked against: a new manifest checks
 /// them all again.
 const UNAVAILABLE: &str = "osfr-unavailable.txt";
@@ -337,7 +340,7 @@ fn fetch_asset(row: &Row, cancel: &AtomicBool) -> Result<Option<Vec<u8>>> {
     let url = asset_url(&row.wire)?;
     // (R) 30 s plus 32 KB/s of the listed size, so slow lines finish large files.
     let time = Duration::from_secs(30 + row.size / (32 * 1024));
-    let mut error = String::new();
+    let (mut error, mut other_version) = (String::new(), false);
     for attempt in 0..3 {
         match patch::fetch_optional(&url, ASSET_LIMIT, time, cancel) {
             Ok(None) => return Ok(None),
@@ -347,12 +350,17 @@ fn fetch_asset(row: &Row, cancel: &AtomicBool) -> Result<Option<Vec<u8>>> {
                 {
                     return Ok(Some(raw));
                 }
-                Ok(_) => error = format!("{} does not match the asset manifest.", row.name),
-                Err(e) => error = e,
+                Ok(_) => other_version = true,
+                Err(e) => (error, other_version) = (e, false),
             },
-            Err(e) => error = e,
+            Err(e) => (error, other_version) = (e, false),
         }
         patch::backoff(attempt, cancel)?;
+    }
+    // A whole file with the wrong crc is another version: the game would refuse it too, so it
+    // counts as not on the host rather than as a failed download.
+    if other_version {
+        return Ok(None);
     }
     Err(error)
 }
