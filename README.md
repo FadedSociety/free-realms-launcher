@@ -108,10 +108,11 @@ The game's own network traffic is not encrypted (the original client's protocol)
 
 ### No client yet?
 
-**Settings → Download the client** fetches the community's client files (about 0.9 GB, 1,788 files) from the
+**Settings → Download the game** fetches the community's client files and every game file it has (about 4.5 GB) from the
 community host's `clientmanifest.xml` into `client/` beside the launcher, the same source the community launcher
-uses. That manifest leaves out the ten `AssetsW_*.pack` world packs; whether a client made from it loads every
-zone is not yet tested, so keep your own complete client folder if you have one.
+uses. That manifest leaves out most game assets, so the launcher then installs the rest from the community host
+into new `Assets_NNN.pack` files, and the game has them from its first start instead of streaming them in play.
+Files the host does not have are skipped; the game could not get those either.
 It checks every file against the manifest's XXH64 hash, resumes an interrupted download, and points the client
 folder setting there when done. Our releases never carry client files. If PLAY reports that DirectX is missing
 (`d3dx9_31.dll`), the link under the message opens Microsoft's DirectX End-User Runtime page.
