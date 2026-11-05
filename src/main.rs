@@ -1525,13 +1525,13 @@ impl Launcher {
                 } else {
                     let idle = self.screenshot.is_none() && self.pending.is_none() && self.child.is_none();
                     if ui
-                        .add_enabled(idle, egui::Button::new("Download the client (about 0.9 GB)"))
+                        .add_enabled(idle, egui::Button::new("Download the game (about 4.5 GB)"))
                         .clicked()
                     {
                         self.start_client_download();
                     }
                 }
-                ui.small("From the community host into client/ beside the launcher. It resumes and checks every file.");
+                ui.small("From the community host into client/ beside the launcher, every game file included. It resumes and checks every file.");
             });
         }
         // GM tools (owner 2026-10-31): the in-game GM panel and the GM Tools / Redeem Code hub trees,

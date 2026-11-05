@@ -416,6 +416,25 @@ fn remember_unavailable<'a>(
     fs::rename(&part, &path).map_err(|e| e.to_string())
 }
 
+/// The same rows as found for the community manifest when this launcher was built, so a first
+/// install does not spend its time asking for them: the manifest's crc, then hex keys (`row_key`).
+/// Hashes, so no list of client files ships. Another manifest ignores it.
+const SHIPPED_UNAVAILABLE: &str = include_str!("../assets/unavailable.txt");
+
+fn row_key(row: &Row) -> u64 {
+    u64::from(crc32(row.wire.as_bytes())) << 32 | u64::from(row.crc)
+}
+
+fn shipped_unavailable(manifest_crc: u32) -> HashSet<u64> {
+    let mut lines = SHIPPED_UNAVAILABLE.lines();
+    if lines.next() != Some(manifest_crc.to_string().as_str()) {
+        return HashSet::new();
+    }
+    lines
+        .filter_map(|key| u64::from_str_radix(key, 16).ok())
+        .collect()
+}
+
 /// Install every manifest asset the client cannot already see (see the module docs). A rerun
 /// installs only what is still missing, so a cancelled or failed install resumes; rows the CDN
 /// did not have under this manifest are not asked for again.
@@ -436,12 +455,13 @@ pub fn install(
     let manifest = manifest(client, cancel)?;
     let manifest_crc = crc32(&manifest);
     let mut gone = unavailable(client, manifest_crc);
+    let shipped = shipped_unavailable(manifest_crc);
     let held = held(client);
     let (mut conflicts, mut known_gone) = (0, 0);
     let missing: Vec<Row> = rows(&String::from_utf8_lossy(&manifest))
         .into_iter()
         .filter(|row| match held.get(&row.name.to_ascii_uppercase()) {
-            None if gone.contains(&row.wire) => {
+            None if gone.contains(&row.wire) || shipped.contains(&row_key(row)) => {
                 known_gone += 1;
                 false
             }
@@ -598,6 +618,24 @@ mod tests {
 
     /// Thousands of entries: every one must be visible through the client's 8,192-byte window, and
     /// the pack lands after the existing read-only ones.
+    #[test]
+    fn the_shipped_list_names_its_manifest_and_a_known_row() {
+        let crc: u32 = SHIPPED_UNAVAILABLE.lines().next().unwrap().parse().unwrap();
+        let shipped = shipped_unavailable(crc);
+        assert_eq!(shipped.len(), SHIPPED_UNAVAILABLE.lines().count() - 1);
+        let row = Row {
+            wire: "img13456624540462536894.dds.z".into(),
+            name: "img13456624540462536894.dds".into(),
+            crc: 2_137_482_445,
+            size: 14_395,
+        };
+        assert!(shipped.contains(&row_key(&row)));
+        assert!(
+            shipped_unavailable(crc ^ 1).is_empty(),
+            "another manifest checks every row"
+        );
+    }
+
     #[test]
     fn missing_rows_are_remembered_for_their_manifest_only() {
         let client = scratch("full-assets-unavailable");
