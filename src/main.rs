@@ -231,6 +231,15 @@ pub(crate) fn default_broker(address: &str) -> String {
 /// T771: the local realm's launcher profile id.
 const LOCAL_PROFILE: &str = "local-realm";
 
+/// The bucket's extra game files, for an install from before them. A failure only leaves them out:
+/// the game still starts.
+fn extra_files(client: &std::path::Path) {
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    if let Err(error) = osfr_launcher::fill::install(client, &stop) {
+        log::warn!("extra game files: {error}");
+    }
+}
+
 fn launcher_folder() -> Option<PathBuf> {
     std::env::current_exe()
         .ok()?
@@ -312,6 +321,7 @@ fn start_local(
         osfr_launcher::local::make_admin(local, id).map_err(|e| e.to_string())?;
         std::fs::write(&admin, b"").map_err(|e| e.to_string())?;
     }
+    extra_files(std::path::Path::new(&client));
     let realm = LocalRealm::start(local, client, &realm_dir).map_err(|e| e.to_string())?;
     let mut login = RealmLogin {
         profile_id: LOCAL_PROFILE.into(),
@@ -806,6 +816,7 @@ impl Launcher {
             if let Some(content) = &content {
                 client_text(&client, content);
             }
+            extra_files(std::path::Path::new(&client));
             let mut login: Box<dyn LoginProvider + Send> = Box::new(RealmLogin {
                 profile_id,
                 broker: None,
@@ -1017,10 +1028,13 @@ impl Launcher {
             };
             // Owner 2026-11-04: every game asset is installed now, none streamed in play.
             let outcome = patch::download_client(&target, &stopping, &mut update).map(|client| {
-                (
-                    client,
-                    full_assets::install(&target, &stopping, &mut update),
-                )
+                let assets = full_assets::install(&target, &stopping, &mut update);
+                // Owner 2026-11-05: the files the community host lacks come from our bucket. PLAY
+                // tries again if this one fails.
+                if let Err(error) = osfr_launcher::fill::install(&target, &stopping) {
+                    log::warn!("extra game files: {error}");
+                }
+                (client, assets)
             });
             let _ = sender.send(outcome);
         });
