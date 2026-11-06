@@ -451,6 +451,22 @@ fn launch_arguments(batch: &str, endpoint: &str, token: SessionToken) -> Result<
     Ok(arguments)
 }
 
+/// The realm's card service (`card_game.json` `launch.port`).
+const CARD_PORT: u16 = 17782;
+
+/// The card window's `host.svr`: its gateway and nothing else. The client reloads this file on every
+/// connect, and a `host` or `port` line would replace the address the gateway answers with. The
+/// community install's copy names someone else's server. The client splits lines on `:`, so an
+/// IPv6 realm gets an empty file: no card window, and no stranger's address either.
+fn card_hosts(endpoint: &str) -> Vec<u8> {
+    match endpoint.rsplit_once(':') {
+        Some((host, _)) if !host.starts_with('[') => {
+            format!("ghost {host}\ngport {CARD_PORT}\n").into_bytes()
+        }
+        _ => Vec::new(),
+    }
+}
+
 struct Change {
     relative: String,
     contents: Vec<u8>,
@@ -536,6 +552,7 @@ impl LaunchPlan {
         let mut contents = vec![
             ("Baseline.ini".into(), baseline.into_bytes()),
             ("UserOptions.ini".into(), options.into_bytes()),
+            ("host.svr".into(), card_hosts(endpoint)),
         ];
         if let Some(locale) = locale {
             let source = locale.canonicalize().map_err(io_error)?;

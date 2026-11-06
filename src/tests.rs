@@ -75,6 +75,43 @@ fn endpoint_and_login_boundaries() {
     assert!(login.session("localhost:20042").is_err()); // No DNS trust in the stub.
 }
 
+/// The card window goes to the realm, and never to the address a community install ships.
+#[test]
+fn the_card_window_is_pointed_at_the_realm() {
+    let scratch = Scratch::new();
+    let shipped = b"host 192.0.2.7
+port 17783
+ghost 192.0.2.7
+gport 17782
+";
+    fs::write(scratch.0.join("host.svr"), shipped).unwrap();
+    let settings = LaunchSettings {
+        width: 1280,
+        height: 720,
+    };
+    let plan = LaunchPlan::build(
+        &scratch.0,
+        "127.0.0.1:20042",
+        None,
+        settings,
+        &mut LocalLoginStub,
+    )
+    .unwrap();
+    let backup = plan.apply().unwrap();
+    assert_eq!(
+        fs::read_to_string(scratch.0.join("host.svr")).unwrap(),
+        "ghost 127.0.0.1
+gport 17782
+",
+        "a host or port line would override the gateway's answer"
+    );
+    assert_eq!(fs::read(backup.join("host.svr")).unwrap(), shipped);
+    assert_eq!(super::card_hosts("example.org:20042"), b"ghost example.org
+gport 17782
+");
+    assert!(super::card_hosts("[::1]:20042").is_empty(), "the client splits on colons");
+}
+
 #[test]
 fn preparation_preserves_inputs_backs_up_and_filters_auth() {
     let scratch = Scratch::new();
@@ -214,7 +251,7 @@ fn omitted_overlay_and_stale_plan_preserve_local_files() {
     .unwrap();
     assert_eq!(
         plan.changed_files().collect::<Vec<_>>(),
-        ["Baseline.ini", "UserOptions.ini"]
+        ["Baseline.ini", "UserOptions.ini", "host.svr"]
     );
     fs::write(scratch.0.join("UserOptions.ini"), b"changed after planning").unwrap();
     assert!(plan.apply().is_err());
