@@ -79,12 +79,11 @@ fn endpoint_and_login_boundaries() {
 #[test]
 fn the_card_window_is_pointed_at_the_realm() {
     let scratch = Scratch::new();
-    let shipped = b"host 192.0.2.7
-port 17783
-ghost 192.0.2.7
-gport 17782
-";
+    let shipped = b"host 192.0.2.7\nport 17783\nghost 192.0.2.7\ngport 17782\n";
     fs::write(scratch.0.join("host.svr"), shipped).unwrap();
+    let config = scratch.0.join("ClientConfig.ini");
+    let stock = fs::read_to_string(&config).unwrap();
+    fs::write(&config, format!("{stock}\nTcgServerAddress=http://dead.example/tcg\n")).unwrap();
     let settings = LaunchSettings {
         width: 1280,
         height: 720,
@@ -100,15 +99,14 @@ gport 17782
     let backup = plan.apply().unwrap();
     assert_eq!(
         fs::read_to_string(scratch.0.join("host.svr")).unwrap(),
-        "ghost 127.0.0.1
-gport 17782
-",
-        "a host or port line would override the gateway's answer"
+        "host 127.0.0.1\nport 17782\nghost 127.0.0.1\ngport 17782\n",
+        "host and port beat the gateway's answer, so they must be the realm too"
     );
     assert_eq!(fs::read(backup.join("host.svr")).unwrap(), shipped);
-    assert_eq!(super::card_hosts("example.org:20042"), b"ghost example.org
-gport 17782
-");
+    let config = fs::read_to_string(scratch.0.join("Baseline.ini")).unwrap();
+    assert!(config.contains("TcgServerAddress=file://./tcg/\n"), "{config}");
+    let hosts = super::card_hosts("example.org:20042");
+    assert!(hosts.starts_with(b"host example.org\nport 17782\n"));
     assert!(super::card_hosts("[::1]:20042").is_empty(), "the client splits on colons");
 }
 

@@ -215,7 +215,7 @@ fn from_upstream(upstream: &str, target: &str) -> Option<(u64, Box<dyn Read>)> {
 }
 
 /// Standard CRC-32, the harness's `zlib.crc32`.
-fn crc32(bytes: &[u8]) -> u32 {
+pub(crate) fn crc32(bytes: &[u8]) -> u32 {
     let table: [u32; 256] = std::array::from_fn(|n| {
         (0..8).fold(n as u32, |c, _| {
             (c >> 1) ^ (0xEDB8_8320 & (c & 1).wrapping_neg())

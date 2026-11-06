@@ -1,6 +1,7 @@
 //! Local client preparation and per-server key-pair authentication.
 
 pub mod assets;
+mod card_art;
 pub mod auth;
 pub mod character_select;
 pub mod client_text;
@@ -454,14 +455,15 @@ fn launch_arguments(batch: &str, endpoint: &str, token: SessionToken) -> Result<
 /// The realm's card service (`card_game.json` `launch.port`).
 const CARD_PORT: u16 = 17782;
 
-/// The card window's `host.svr`: its gateway and nothing else. The client reloads this file on every
-/// connect, and a `host` or `port` line would replace the address the gateway answers with. The
-/// community install's copy names someone else's server. The client splits lines on `:`, so an
-/// IPv6 realm gets an empty file: no card window, and no stranger's address either.
+/// The card window's `host.svr`, all of it the realm. The client reloads this file on every connect,
+/// and its `host` and `port` beat the address the gateway answers with, so a realm behind a router
+/// needs no public address of its own. The community install's copy names someone else's server.
+/// The client splits lines on `:`, so an IPv6 realm gets an empty file: no card window, and no
+/// stranger's address either.
 fn card_hosts(endpoint: &str) -> Vec<u8> {
     match endpoint.rsplit_once(':') {
         Some((host, _)) if !host.starts_with('[') => {
-            format!("ghost {host}\ngport {CARD_PORT}\n").into_bytes()
+            format!("host {host}\nport {CARD_PORT}\nghost {host}\ngport {CARD_PORT}\n").into_bytes()
         }
         _ => Vec::new(),
     }
@@ -539,6 +541,11 @@ impl LaunchPlan {
                 .as_ref()
                 .map_or(COMMUNITY_ASSETS_URL, |a| a.url.as_str()),
         )?;
+        let baseline = if baseline.lines().any(|l| l.starts_with("TcgServerAddress=")) {
+            replace_setting(&baseline, "TcgServerAddress", card_art::SET_ADDRESS)?
+        } else {
+            baseline
+        };
         let mut options = text_or(&root, "UserOptions.ini", DEFAULT_OPTIONS)?;
         for (key, value) in [
             ("WindowedWidth", settings.width.to_string()),
@@ -638,6 +645,10 @@ impl LaunchPlan {
     pub fn apply(&self) -> Result<PathBuf> {
         if !no_link(&self.root.join("locale"))?.is_dir() {
             return Err("Unsafe locale directory.".into());
+        }
+        // A client whose card window can't be prepared still plays everything else.
+        if let Err(error) = card_art::install(&self.root) {
+            eprintln!("card window not prepared: {error}");
         }
         for change in &self.changes {
             let target = safe_target(&self.root, &change.relative)?;
