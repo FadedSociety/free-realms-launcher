@@ -1231,10 +1231,11 @@ impl Launcher {
                 }
             });
             let ports = format!(
-                "UDP {g}, {l} · TCP {g}, {b}",
+                "UDP {g}, {l} · TCP {g}, {b}, {c}",
                 g = osfr_launcher::local::GATEWAY_PORT,
                 l = osfr_launcher::local::LOGIN_PORT,
-                b = osfr_launcher::local::BROKER_PORT
+                b = osfr_launcher::local::BROKER_PORT,
+                c = osfr_launcher::CARD_PORT
             );
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Forward").strong().color(Color32::WHITE));
@@ -1575,7 +1576,7 @@ Press **Change** above PLAY NOW!, pick **Local realm** and press **PLAY NOW!**. 
 Open the **Host** tab and pick who can join:
 - **Just me**: only this PC.
 - **Friends nearby**: friends on the same Wi-Fi or on Tailscale join at the address the Host tab shows.
-- **Internet**: forward UDP 20041 and 20042 and TCP 20041 and 20043 on your router to this PC, then enter your public IP (**Find it** looks it up). If your router's internet address differs from it or starts with 100.64 to 100.127, your provider shares one address between homes and forwarding will not work: use Tailscale instead.
+- **Internet**: forward UDP 20041 and 20042 and TCP 20041, 20043 and 17782 on your router to this PC, then enter your public IP (**Find it** looks it up). If your router's internet address differs from it or starts with 100.64 to 100.127, your provider shares one address between homes and forwarding will not work: use Tailscale instead.
 Press **HOST & PLAY** and allow the Windows firewall prompt for private networks. Then press **Copy join details** and send the realm address and server identity to your players. The realm runs while your game is open. To choose who can join, list their handles in server/state/whitelist.txt.
 
 ## 4. Join a friend's realm

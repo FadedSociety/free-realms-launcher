@@ -8,17 +8,19 @@
 //! file list names what the card window would download, and an install already has all of that, so
 //! it gets an empty list from a local folder. Nothing is fetched, and every step can run again at
 //! every launch.
-use crate::{Result, assets::crc32};
+use crate::{Result, assets::crc32, safe_target};
 use std::{
     collections::HashMap,
     fs::{self, File},
-    io::{BufReader, Read, Seek, SeekFrom},
+    io::{BufReader, Read, Seek, SeekFrom, Write},
     path::Path,
 };
 
 const DLL: &str = "tcg/FreeRealmsTCG.dll";
 const PACK: &str = "assets/assetpack000W_000.pack";
 const MANIFEST: &str = "assets/assetpack000_manifest.txt";
+/// The manifest as it shipped, kept once: the rows a later art pack brings back live here.
+const STOCK: &str = "assets/assetpack000_manifest.stock.txt";
 const CRC: &str = "assets/manifest.crc";
 /// The address in the DLL and what replaces it, both with the end of the string.
 const DEAD: &[u8] = b"http://fr.patch.station.sony.com/patch/freerealmstcg/live/assets/\0";
@@ -26,7 +28,7 @@ const LOCAL: &[u8] = b"file://./assets/\0";
 /// More rows than the 9,756 of the art manifest; a pack past this is damaged.
 const MAX_ROWS: u32 = 1 << 20;
 
-/// What `TcgServerAddress` becomes. The slash matters: a local address is joined without one.
+/// What `TcgServerAddress` becomes.
 pub const SET_ADDRESS: &str = "file://./tcg/";
 const SET_MANIFEST: &str = "tcg/AssetsTcg_manifest.txt";
 const SET_CRC: &str = "tcg/manifest.crc";
@@ -47,7 +49,10 @@ pub fn install(client: &Path) -> Result<()> {
     }
     local_set(client)?;
     let held = pack_rows(&client.join(PACK)).map_err(|e| e.to_string())?;
-    let manifest = fs::read(client.join(MANIFEST)).map_err(|e| e.to_string())?;
+    if !client.join(STOCK).is_file() {
+        fs::copy(client.join(MANIFEST), client.join(STOCK)).map_err(|e| e.to_string())?;
+    }
+    let manifest = fs::read(client.join(STOCK)).map_err(|e| e.to_string())?;
     let kept = kept_rows(&manifest, &held);
     if kept.is_empty() {
         return Err("The card art does not match its pack.".into());
@@ -101,12 +106,15 @@ fn write_changed(client: &Path, relative: &str, bytes: &[u8]) -> Result<()> {
 
 /// A whole-file replace: a crash can leave the old file or the new one, never half of either.
 fn write(client: &Path, relative: &str, bytes: &[u8]) -> Result<()> {
-    let target = client.join(relative);
-    if let Some(folder) = target.parent() {
+    if let Some(folder) = client.join(relative).parent() {
         fs::create_dir_all(folder).map_err(|e| e.to_string())?;
     }
+    let target = safe_target(client, relative)?;
     let part = client.join(format!("{relative}.osfr-part"));
-    fs::write(&part, bytes).map_err(|e| e.to_string())?;
+    let mut file = File::create(&part).map_err(|e| e.to_string())?;
+    file.write_all(bytes).map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    drop(file);
     fs::rename(&part, &target).map_err(|e| e.to_string())
 }
 
@@ -216,7 +224,7 @@ mod tests {
         fs::write(root.join(MANIFEST), rows).unwrap();
         let set = "cards.rcc.z,5,10\r\nTradingCardAssets.txt.z,4166378948,370\r\nindex.z,6,10\r\n";
         fs::write(root.join(SET_MANIFEST), set).unwrap();
-        Client(root)
+        Client(root.canonicalize().unwrap())
     }
 
     /// By hand, on a real client: `CARD_ART_CLIENT=<folder>`, then run the ignored tests.
@@ -252,6 +260,20 @@ mod tests {
         let expected = format!("cards.rcc.z,5,10\r\n{row}index.z,6,10\r\n");
         assert_eq!(manifest, expected.into_bytes());
         assert_eq!(fs::read(client.0.join(SET_CRC)).unwrap(), crc_file(&manifest));
+    }
+
+    /// A row trimmed today can come back: the stock manifest keeps it, and a later pack holds it.
+    #[test]
+    fn the_stock_manifest_keeps_every_row() {
+        let client = client("stock");
+        let shipped = fs::read(client.0.join(MANIFEST)).unwrap();
+        install(&client.0).unwrap();
+        assert_eq!(fs::read(client.0.join(STOCK)).unwrap(), shipped);
+        let chunks: &[&[(&str, u32)]] = &[&[("a.png", 1), ("c.png", 3), ("missing.png", 4)]];
+        fs::write(client.0.join(PACK), pack(chunks)).unwrap();
+        install(&client.0).unwrap();
+        let manifest = fs::read(client.0.join(MANIFEST)).unwrap();
+        assert_eq!(manifest, b"a.png,1,10\r\nc.png,3,10\r\nmissing.png,4,10\r\n");
     }
 
     #[test]

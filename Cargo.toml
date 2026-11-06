@@ -1,6 +1,6 @@
 [package]
 name = "osfr-launcher"
-version = "0.3.8"
+version = "0.3.9"
 edition = "2024"
 publish = false
 description = "Free Realms Expanded launcher skeleton (W86)"

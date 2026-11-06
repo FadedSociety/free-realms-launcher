@@ -453,11 +453,12 @@ fn launch_arguments(batch: &str, endpoint: &str, token: SessionToken) -> Result<
 }
 
 /// The realm's card service (`card_game.json` `launch.port`).
-const CARD_PORT: u16 = 17782;
+pub const CARD_PORT: u16 = 17782;
 
 /// The card window's `host.svr`, all of it the realm. The client reloads this file on every connect,
 /// and its `host` and `port` beat the address the gateway answers with, so a realm behind a router
-/// needs no public address of its own. The community install's copy names someone else's server.
+/// needs no public address of its own, only this port forwarded. The community install's copy names
+/// someone else's server.
 /// The client splits lines on `:`, so an IPv6 realm gets an empty file: no card window, and no
 /// stranger's address either.
 fn card_hosts(endpoint: &str) -> Vec<u8> {
@@ -648,7 +649,7 @@ impl LaunchPlan {
         }
         // A client whose card window can't be prepared still plays everything else.
         if let Err(error) = card_art::install(&self.root) {
-            eprintln!("card window not prepared: {error}");
+            log::warn!("card window: {error}");
         }
         for change in &self.changes {
             let target = safe_target(&self.root, &change.relative)?;
