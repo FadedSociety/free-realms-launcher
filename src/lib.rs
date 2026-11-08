@@ -1,7 +1,7 @@
 //! Local client preparation and per-server key-pair authentication.
 
 pub mod assets;
-mod card_art;
+pub mod card_art;
 pub mod auth;
 pub mod character_select;
 pub mod client_text;

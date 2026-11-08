@@ -8,12 +8,18 @@
 //! file list names what the card window would download, and an install already has all of that, so
 //! it gets an empty list from a local folder. Nothing is fetched, and every step can run again at
 //! every launch.
-use crate::{Result, assets::crc32, safe_target};
+use crate::{
+    Result,
+    assets::crc32,
+    patch::{self, Url},
+    safe_target,
+};
 use std::{
     collections::HashMap,
     fs::{self, File},
     io::{BufReader, Read, Seek, SeekFrom, Write},
     path::Path,
+    sync::atomic::AtomicBool,
 };
 
 const DLL: &str = "tcg/FreeRealmsTCG.dll";
@@ -27,6 +33,14 @@ const DEAD: &[u8] = b"http://fr.patch.station.sony.com/patch/freerealmstcg/live/
 const LOCAL: &[u8] = b"file://./assets/\0";
 /// More rows than the 9,756 of the art manifest; a pack past this is damaged.
 const MAX_ROWS: u32 = 1 << 20;
+/// Card faces the client's own pack lacks, as one read-only pack on our bucket (owner 2026-11-08),
+/// pinned by hash. `ART_ROWS` are its `name,crc,size` rows.
+const ART_URL: &str =
+    "https://storage.googleapis.com/freerealmsexpanded-assets/fill/v1/assetpack000_000.pack";
+const ART_SHA256: &str = "634e7fe241acc0c5bc72f5b66fee6f901d39cc32dba469db9e9a5a055ef78c78";
+const ART_SIZE: u64 = 22_313_291;
+const ART_PACK: &str = "assets/assetpack000_000.pack";
+const ART_ROWS: &str = include_str!("../assets/card-art-rows.txt");
 
 /// What `TcgServerAddress` becomes.
 pub const SET_ADDRESS: &str = "file://./tcg/";
@@ -41,6 +55,24 @@ const LIST_FILE: [u8; 18] = [
     0xa1, 0xb2, 0xc3, 0xd4, 0, 0, 0, 2, 0x78, 0x9c, 0xe3, 0xe5, 2, 0, 0, 0x26, 0, 0x18,
 ];
 
+/// Fetches the card art pack, checked against the hash above; does nothing once it is in place.
+/// A failure only leaves the plain card backs: `install` adds the rows when the pack is there.
+pub fn fetch_art(client: &Path, cancel: &AtomicBool) -> Result<()> {
+    if art_installed(client) || !client.join(PACK).is_file() {
+        return Ok(());
+    }
+    let body = patch::fetch_bytes(&Url::parse(ART_URL)?, ART_SIZE, cancel)?;
+    if body.len() as u64 != ART_SIZE || patch::sha256(&body)? != ART_SHA256 {
+        return Err("The card art failed its check.".into());
+    }
+    write(client, ART_PACK, &body)
+}
+
+/// `write` replaces whole files, so the right size is this version, whole.
+fn art_installed(client: &Path) -> bool {
+    fs::metadata(client.join(ART_PACK)).is_ok_and(|file| file.len() == ART_SIZE)
+}
+
 /// Prepares the card window, if this client has one. The DLL goes last: until then the client
 /// behaves as it did.
 pub fn install(client: &Path) -> Result<()> {
@@ -53,9 +85,12 @@ pub fn install(client: &Path) -> Result<()> {
         fs::copy(client.join(MANIFEST), client.join(STOCK)).map_err(|e| e.to_string())?;
     }
     let manifest = fs::read(client.join(STOCK)).map_err(|e| e.to_string())?;
-    let kept = kept_rows(&manifest, &held);
+    let mut kept = kept_rows(&manifest, &held);
     if kept.is_empty() {
         return Err("The card art does not match its pack.".into());
+    }
+    if art_installed(client) {
+        kept.extend(ART_ROWS.replace('\n', "\r\n").into_bytes());
     }
     write_changed(client, MANIFEST, &kept)?;
     write_changed(client, CRC, &crc_file(&kept))?;
@@ -225,6 +260,31 @@ mod tests {
         let set = "cards.rcc.z,5,10\r\nTradingCardAssets.txt.z,4166378948,370\r\nindex.z,6,10\r\n";
         fs::write(root.join(SET_MANIFEST), set).unwrap();
         Client(root.canonicalize().unwrap())
+    }
+
+    /// The art pack's rows join the manifest only once the pack is really there.
+    #[test]
+    fn the_art_rows_arrive_with_the_art_pack() {
+        let client = client("art");
+        let first = ART_ROWS.lines().next().unwrap();
+        install(&client.0).unwrap();
+        let manifest = fs::read_to_string(client.0.join(MANIFEST)).unwrap();
+        assert!(!manifest.contains(first), "no pack, no rows");
+        File::create(client.0.join(ART_PACK)).unwrap().set_len(ART_SIZE).unwrap();
+        install(&client.0).unwrap();
+        let manifest = fs::read(client.0.join(MANIFEST)).unwrap();
+        assert!(String::from_utf8_lossy(&manifest).contains(first));
+        assert_eq!(fs::read(client.0.join(CRC)).unwrap(), crc_file(&manifest));
+    }
+
+    /// Downloads the real pack: `cargo test -- --ignored`.
+    #[test]
+    #[ignore = "fetches 22 MB from the bucket"]
+    fn the_bucket_serves_the_pinned_art() {
+        let url = Url::parse(ART_URL).unwrap();
+        let body = patch::fetch_bytes(&url, ART_SIZE, &AtomicBool::new(false)).unwrap();
+        assert_eq!(body.len() as u64, ART_SIZE);
+        assert_eq!(patch::sha256(&body).unwrap(), ART_SHA256);
     }
 
     /// By hand, on a real client: `CARD_ART_CLIENT=<folder>`, then run the ignored tests.

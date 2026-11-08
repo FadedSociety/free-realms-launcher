@@ -238,6 +238,9 @@ fn extra_files(client: &std::path::Path) {
     if let Err(error) = osfr_launcher::fill::install(client, &stop) {
         log::warn!("extra game files: {error}");
     }
+    if let Err(error) = osfr_launcher::card_art::fetch_art(client, &stop) {
+        log::warn!("card art: {error}");
+    }
 }
 
 fn launcher_folder() -> Option<PathBuf> {
@@ -1033,6 +1036,9 @@ impl Launcher {
                 // tries again if this one fails.
                 if let Err(error) = osfr_launcher::fill::install(&target, &stopping) {
                     log::warn!("extra game files: {error}");
+                }
+                if let Err(error) = osfr_launcher::card_art::fetch_art(&target, &stopping) {
+                    log::warn!("card art: {error}");
                 }
                 (client, assets)
             });
