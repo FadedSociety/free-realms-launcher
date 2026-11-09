@@ -36,9 +36,9 @@ const MAX_ROWS: u32 = 1 << 20;
 /// Card faces the client's own pack lacks, as one read-only pack on our bucket (owner 2026-11-08),
 /// pinned by hash. `ART_ROWS` are its `name,crc,size` rows.
 const ART_URL: &str =
-    "https://storage.googleapis.com/freerealmsexpanded-assets/fill/v1/assetpack000_000.pack";
-const ART_SHA256: &str = "634e7fe241acc0c5bc72f5b66fee6f901d39cc32dba469db9e9a5a055ef78c78";
-const ART_SIZE: u64 = 22_313_291;
+    "https://storage.googleapis.com/freerealmsexpanded-assets/fill/v2/assetpack000_000.pack";
+const ART_SHA256: &str = "5e57f099b10e10acafefc30e11447e5f9b7c697f26033a8ee7e30e2781f73c1d";
+const ART_SIZE: u64 = 62_907_522;
 const ART_PACK: &str = "assets/assetpack000_000.pack";
 const ART_ROWS: &str = include_str!("../assets/card-art-rows.txt");
 
