@@ -524,10 +524,13 @@ impl LaunchPlan {
         // GM tools add rows to the client's own manifest, so the client must get that manifest's crc:
         // it goes through the Responder, which fetches everything it does not hold from the
         // community host.
+        // 0.3.13: the passthrough fetches over https. The launcher's URL rules refuse plain http
+        // to anything but loopback, so `COMMUNITY_ASSETS_URL` (the client's own http form) made
+        // every asset the client held no copy of a 404: Brawler's outfit, Blackspore's terrain.
         let assets = if local_assets && (gm_tools::installed(&root) || fill::installed(&root)) {
             Some(assets::Responder::start_with_upstream(
                 &root,
-                Some(COMMUNITY_ASSETS_URL),
+                Some(full_assets::ASSETS),
             )?)
         } else if local_assets {
             None

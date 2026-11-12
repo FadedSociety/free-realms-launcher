@@ -37,7 +37,7 @@ use std::{
 };
 
 /// The community CDN the game streams from (the launcher writes its http form into Baseline.ini).
-const ASSETS: &str = "https://osfr.editz.dev/assets";
+pub(crate) const ASSETS: &str = "https://osfr.editz.dev/assets";
 const MANIFEST: &str = "Assets_manifest.txt";
 const ENVELOPE: u32 = 0xA1B2C3D4;
 const BLOCK: u64 = 8192;

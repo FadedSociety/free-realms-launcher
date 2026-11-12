@@ -707,6 +707,30 @@ fn a_community_client_streams_its_world_from_the_community_asset_server() {
     assert!(baseline.contains("Server=127.0.0.1:20042"));
 }
 
+/// 0.3.13 (owner 2026-11-12: Brawler kept the Adventurer outfit; Blackspore never finished
+/// loading): a community client with the fill pack or GM tools goes through the asset responder,
+/// which fetches every asset the client holds no copy of from the CDN. The launcher's URL rules
+/// refuse plain http to anything but loopback, so the passthrough must be the https form; the
+/// client's own http form made every such asset a 404.
+#[test]
+fn the_asset_passthrough_uses_a_url_the_launcher_accepts() {
+    // The client's own requests, as its log shows them.
+    for request in [
+        "/931/FabledRealms_20_-28.gcnk?2896401846",
+        "/855/brawler_m_feet_combatbootspiked_brawler_plaincombatboot-L1_tint.dds.z?3516268001",
+    ] {
+        assert!(
+            crate::assets::upstream_url(crate::full_assets::ASSETS, request).is_some(),
+            "{request} reaches the CDN"
+        );
+        assert!(
+            crate::assets::upstream_url(crate::COMMUNITY_ASSETS_URL, request).is_none(),
+            "the client's http form is refused, so it cannot be the passthrough"
+        );
+    }
+    assert!(crate::assets::upstream_url(crate::full_assets::ASSETS, "/x/../a.dds.z?1").is_none());
+}
+
 /// A real client folder prepares as a dry run (nothing is written): `OSFR_CLIENT=<folder>`.
 #[test]
 #[ignore = "needs OSFR_CLIENT"]

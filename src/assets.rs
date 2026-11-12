@@ -198,6 +198,17 @@ fn body<'a>(target: &str, folder: &Path, crc: &'a [u8]) -> Option<(u64, Box<dyn 
 /// A pass-through asset: only `/<bucket>/<asset name>?<crc>` shapes go upstream, and only a 200 with
 /// a length is relayed (anything else answers 404 as a missing local file does).
 fn from_upstream(upstream: &str, target: &str) -> Option<(u64, Box<dyn Read>)> {
+    let url = upstream_url(upstream, target)?;
+    let (length, response) = crate::patch::open(&url).ok()?;
+    Some((length, Box::new(response.take(length))))
+}
+
+/// The CDN address for a client request `/<bucket>/<name>?<crc>`: the bare path, as
+/// `full_assets` requests it. 0.3.13: the launcher's URL rules refuse a query and plain http to
+/// anything but loopback, so the old `{upstream}{target}` made every passthrough a 404 (owner
+/// 2026-11-12: Brawler's outfit, Blackspore's terrain). The client checks each body against its
+/// manifest crc itself.
+pub(crate) fn upstream_url(upstream: &str, target: &str) -> Option<crate::patch::Url> {
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let (bucket, name) = path.strip_prefix('/')?.split_once('/')?;
     if bucket.is_empty()
@@ -208,10 +219,7 @@ fn from_upstream(upstream: &str, target: &str) -> Option<(u64, Box<dyn Read>)> {
     {
         return None;
     }
-    let url =
-        crate::patch::Url::parse(&format!("{upstream}{}", target.replace(' ', "%20"))).ok()?;
-    let (length, response) = crate::patch::open(&url).ok()?;
-    Some((length, Box::new(response.take(length))))
+    crate::patch::Url::parse(&format!("{upstream}{}", path.replace(' ', "%20"))).ok()
 }
 
 /// Standard CRC-32, the harness's `zlib.crc32`.
