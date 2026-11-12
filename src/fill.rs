@@ -9,9 +9,9 @@ use crate::{
 use std::{collections::HashSet, fs, path::Path, sync::atomic::AtomicBool, time::Duration};
 
 const URL: &str =
-    "https://storage.googleapis.com/freerealmsexpanded-assets/fill/v1/Assets_fill.pack";
-const SHA256: &str = "6eb55285f6799db8988f3348b154da3b46398856c7b744b51dedac81ac59439c";
-const SIZE: u64 = 108_828_811;
+    "https://storage.googleapis.com/freerealmsexpanded-assets/fill/v2/Assets_fill.pack";
+const SHA256: &str = "d18deeb7c3944c026628824289d6885d93ce95f04fbbdef390c07f855e3d4d9b";
+const SIZE: u64 = 142_961_349;
 /// Time for the whole pack. The 30 s manifest limit needed 29+ Mbit/s: slower players timed out,
 /// started without it and re-downloaded from zero on every Play (Opus check, 2026-11-12).
 const FETCH_TIME: Duration = Duration::from_secs(30 * 60);
