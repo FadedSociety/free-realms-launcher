@@ -609,6 +609,10 @@ pub(crate) struct Launcher {
     fit_size: Vec2,
     /// v0.3.1: the release whose full notes show over the launcher.
     news_open: Option<osfr_launcher::release::NewsItem>,
+    /// v0.3.12 (owner 2026-11-12): the welcome popup with the first steps is open.
+    welcome_open: bool,
+    /// v0.3.12: its "Don't show this again" box, remembered in launcher.json (`hide_welcome`).
+    welcome_hidden: bool,
     /// Test aid: open the newest release's notes when the news arrives.
     notes_preview: bool,
     /// The client folder the fonts were last chosen for, and whether the game's font is in use.
@@ -713,6 +717,8 @@ impl Launcher {
             prefs_saved: String::new(),
             fit_size: Vec2::ZERO,
             news_open: None,
+            welcome_open: false,
+            welcome_hidden: false,
             notes_preview: false,
             font_client: String::new(),
             game_font: false,
@@ -1895,6 +1901,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut join_preview = false;
     let mut notes_preview = false;
     let mut guide_preview = false;
+    let mut welcome_preview = false;
     let mut join_window_preview = false;
     let mut servers_preview = false;
     let mut window_size = [940.0, 790.0];
@@ -1931,6 +1938,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             join_window_preview = true;
         } else if arg == "--test-guide" {
             guide_preview = true;
+        } else if arg == "--test-welcome" {
+            welcome_preview = true;
         } else if arg == "--test-notes" {
             notes_preview = true;
         } else if arg == "--test-join-flow" {
@@ -2001,6 +2010,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .map_err(std::io::Error::other)?;
             launcher.load_prefs();
+            // Screenshots skip the saved prefs, so they show the welcome only when asked to.
+            launcher.welcome_open =
+                welcome_preview || (launcher.screenshot.is_none() && !launcher.welcome_hidden);
             launcher.patch_preview = patch_preview;
             launcher.host_page = host_page;
             launcher.notes_preview = notes_preview;

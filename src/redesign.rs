@@ -84,6 +84,7 @@ impl Launcher {
             });
         self.notes_window(ctx);
         self.join_window(ctx);
+        self.welcome_window(ctx);
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
@@ -232,6 +233,7 @@ impl Launcher {
             "realm_description": self.realm_description.trim(),
             "favorites": self.favorites,
             "directory_url": self.directory_url.trim(),
+            "hide_welcome": self.welcome_hidden,
         })
         .to_string()
     }
@@ -273,6 +275,10 @@ impl Launcher {
         self.realm_name = text_of("realm_name");
         self.realm_description = text_of("realm_description");
         self.directory_url = text_of("directory_url");
+        self.welcome_hidden = prefs
+            .get("hide_welcome")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         self.favorites = prefs
             .get("favorites")
             .and_then(|v| v.as_array())
@@ -768,6 +774,84 @@ impl Launcher {
     }
 
     /// A news card's full release notes over the launcher. Esc, Close or a click outside closes it.
+    /// v0.3.12 (owner 2026-11-12): the welcome for new players, the three steps to a first game,
+    /// shown at every start until "Don't show this again" is ticked (`hide_welcome`). It waits
+    /// while the notes or join window is open, and Escape closes it.
+    fn welcome_window(&mut self, ctx: &egui::Context) {
+        if !self.welcome_open || self.news_open.is_some() || self.join_open {
+            return;
+        }
+        let screen = ctx.content_rect();
+        let mut close = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        egui::Area::new(egui::Id::new("rd-welcome"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen.min)
+            .show(ctx, |ui| {
+                ui.allocate_rect(screen, egui::Sense::click());
+                ui.painter()
+                    .rect_filled(screen, 0.0, Color32::from_black_alpha(170));
+                let panel = egui::Rect::from_center_size(
+                    screen.center(),
+                    Vec2::new(
+                        (screen.width() - 80.0).min(660.0),
+                        (screen.height() - 80.0).min(440.0),
+                    ),
+                );
+                ui.allocate_rect(panel, egui::Sense::click());
+                ui.painter().add(theme::panel_shape(&self.art, panel));
+                ui.scope_builder(
+                    egui::UiBuilder::new().max_rect(panel.shrink(PANEL_PAD)),
+                    |ui| {
+                        panel_title(ui, "Hey, Free Realms friends!");
+                        ui.add_space(8.0);
+                        let body_h = ui.available_height() - 50.0 - 34.0 - 20.0;
+                        ui.scope(|ui| {
+                            themed_scroll(ui);
+                            egui::ScrollArea::vertical()
+                                .max_height(body_h)
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| notes_text(ui, WELCOME));
+                        });
+                        ui.add_space(8.0);
+                        ui.checkbox(
+                            &mut self.welcome_hidden,
+                            RichText::new("Don't show this again").color(Color32::WHITE),
+                        );
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            let width = 190.0 + 150.0 + 150.0 + 2.0 * 12.0;
+                            ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
+                            let button = |ui: &mut egui::Ui, art, label, w| {
+                                theme::button(
+                                    ui,
+                                    art,
+                                    label,
+                                    Vec2::new(w, 50.0),
+                                    true,
+                                    theme::ButtonSkin::Standard,
+                                )
+                                .clicked()
+                            };
+                            if button(ui, &self.art, "Go to Settings", 190.0) {
+                                self.settings_page = true;
+                                self.host_page = false;
+                                self.servers_page = false;
+                                close = true;
+                            }
+                            if button(ui, &self.art, "Full guide", 150.0) {
+                                self.news_open = Some(guide_item());
+                                close = true;
+                            }
+                            close |= button(ui, &self.art, "Let's play!", 150.0);
+                        });
+                    },
+                );
+            });
+        if close {
+            self.welcome_open = false;
+        }
+    }
+
     fn notes_window(&mut self, ctx: &egui::Context) {
         let Some(item) = self.news_open.clone() else {
             return;
@@ -1564,6 +1648,19 @@ pub(super) fn guide_item() -> osfr_launcher::release::NewsItem {
         url: "https://github.com/FadedSociety/free-realms-launcher#readme".into(),
     }
 }
+
+/// v0.3.12: the welcome popup's text (`welcome_window`); the full guide is [`GUIDE`].
+const WELCOME: &str = "\
+Here's a quick how-to to get you up and running:
+
+**1.** Head over to **Settings** and press **Download the game (about 4.5 GB)**. Already have the Free Realms client? Choose the folder with FreeRealms.exe instead.
+
+**2.** Come back to **Play** and press **PLAY NOW!** The first time, the launcher downloads the server and checks every file, so give it a few minutes. Your first login makes your account.
+
+**3.** Want company? The **Host** tab sets up a realm for your friends, and the **Servers** tab lists realms you can join.
+
+The **Get started** button at the bottom of the launcher has the full guide any time. Have fun!
+";
 
 const GUIDE: &str = "\
 ## 1. Your game client
