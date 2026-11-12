@@ -20,9 +20,12 @@ use std::{
     io::{BufReader, Read, Seek, SeekFrom, Write},
     path::Path,
     sync::atomic::AtomicBool,
+    time::Duration,
 };
 
 const DLL: &str = "tcg/FreeRealmsTCG.dll";
+/// Time for the whole art pack (62.9 MB); the 30 s manifest limit needed 16.8+ Mbit/s.
+const ART_FETCH_TIME: Duration = Duration::from_secs(30 * 60);
 const PACK: &str = "assets/assetpack000W_000.pack";
 const MANIFEST: &str = "assets/assetpack000_manifest.txt";
 /// The manifest as it shipped, kept once: the rows a later art pack brings back live here.
@@ -61,7 +64,8 @@ pub fn fetch_art(client: &Path, cancel: &AtomicBool) -> Result<()> {
     if art_installed(client) || !client.join(PACK).is_file() {
         return Ok(());
     }
-    let body = patch::fetch_bytes(&Url::parse(ART_URL)?, ART_SIZE, cancel)?;
+    let body = patch::fetch_optional(&Url::parse(ART_URL)?, ART_SIZE, ART_FETCH_TIME, cancel)?
+        .ok_or("The card art is not on the server.")?;
     if body.len() as u64 != ART_SIZE || patch::sha256(&body)? != ART_SHA256 {
         return Err("The card art failed its check.".into());
     }

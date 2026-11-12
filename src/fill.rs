@@ -6,12 +6,15 @@ use crate::{
     Result,
     patch::{self, Url},
 };
-use std::{collections::HashSet, fs, path::Path, sync::atomic::AtomicBool};
+use std::{collections::HashSet, fs, path::Path, sync::atomic::AtomicBool, time::Duration};
 
 const URL: &str =
     "https://storage.googleapis.com/freerealmsexpanded-assets/fill/v1/Assets_fill.pack";
 const SHA256: &str = "6eb55285f6799db8988f3348b154da3b46398856c7b744b51dedac81ac59439c";
 const SIZE: u64 = 108_828_811;
+/// Time for the whole pack. The 30 s manifest limit needed 29+ Mbit/s: slower players timed out,
+/// started without it and re-downloaded from zero on every Play (Opus check, 2026-11-12).
+const FETCH_TIME: Duration = Duration::from_secs(30 * 60);
 const ROWS: &str = include_str!("../assets/fill-rows.txt");
 const MARKER: &str = "osfr-fill.txt";
 const MANIFEST: &str = "Assets_manifest.txt";
@@ -28,7 +31,8 @@ pub fn install(client: &Path, cancel: &AtomicBool) -> Result<()> {
         return Ok(());
     }
     let url = Url::parse(URL)?;
-    let body = patch::fetch_bytes(&url, SIZE, cancel)?;
+    let body = patch::fetch_optional(&url, SIZE, FETCH_TIME, cancel)?
+        .ok_or("The extra game files are not on the server.")?;
     if body.len() as u64 != SIZE || patch::sha256(&body)? != SHA256 {
         return Err("The extra game files failed their check.".into());
     }
