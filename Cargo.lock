@@ -2106,7 +2106,7 @@ dependencies = [
 
 [[package]]
 name = "osfr-launcher"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "ed25519-dalek",
  "eframe",

@@ -1,5 +1,44 @@
 # Free Realms Expanded launcher
 
+## Hello, Free Realmers!
+
+Welcome back to the Realms! This launcher is the easy way into
+[Free Realms Expanded](https://github.com/FadedSociety/free-realms-expanded), the
+fan revival of Free Realms. It downloads the game, keeps it up to date, and lets you
+play on your own PC or host a realm for your friends.
+
+### Get playing in three steps
+
+1. Grab `osfr-launcher.exe` from the
+   [latest release](https://github.com/FadedSociety/free-realms-launcher/releases/latest)
+   and run it.
+2. Open **Settings** and press **Download the game**. Already have the Free Realms
+   client? Choose the folder with `FreeRealms.exe` instead.
+3. Press **PLAY NOW!** Your first login makes your account. Want company? The
+   **Host** tab sets up a realm for your friends, and the **Servers** tab lists
+   realms you can join.
+
+### Here's where we're at
+
+It's an early preview. Hundreds of quests, the combat jobs, battles, dungeons and
+minigames are in, and every update brings more. Some things are still rough, so you
+will find bugs. The game's own
+[README](https://github.com/FadedSociety/free-realms-expanded#hello-free-realmers)
+has the latest news.
+
+### Here's how you can help
+
+- **Tell us what breaks.** Open an issue on
+  [Free Realms Expanded](https://github.com/FadedSociety/free-realms-expanded/issues)
+  (game problems) or [here](https://github.com/FadedSociety/free-realms-launcher/issues)
+  (launcher problems), with what you did and what happened. A screenshot helps a lot.
+- **Share what you remember.** Old screenshots, videos and memories of where things
+  stood help us put the world back together.
+
+The rest of this page is for people building or hosting the launcher.
+
+## How the launcher works
+
 Standalone Rust launcher. It prepares an existing, writable client copy and
 starts its local `FreeRealms.exe`. Choose that copy and an optional locale pair
 in Settings. A realm's pinned patch manifest can install or repair files in that

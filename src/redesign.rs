@@ -802,7 +802,7 @@ impl Launcher {
                 ui.scope_builder(
                     egui::UiBuilder::new().max_rect(panel.shrink(PANEL_PAD)),
                     |ui| {
-                        panel_title(ui, "Hey, Free Realms friends!");
+                        panel_title(ui, "Hello, Free Realmers!");
                         ui.add_space(8.0);
                         let body_h = ui.available_height() - 50.0 - 34.0 - 20.0;
                         ui.scope(|ui| {
@@ -1651,13 +1651,20 @@ pub(super) fn guide_item() -> osfr_launcher::release::NewsItem {
 
 /// v0.3.12: the welcome popup's text (`welcome_window`); the full guide is [`GUIDE`].
 const WELCOME: &str = "\
-Here's a quick how-to to get you up and running:
+Welcome back to the Realms! Free Realms Expanded brings the game back on your own PC, and your friends can join you.
 
+### Here's where we're at
+It's an early preview. Hundreds of quests, the combat jobs, battles, dungeons and minigames are in, and every update brings more. Some things are still rough, so you will find bugs.
+
+### Get playing in three steps
 **1.** Head over to **Settings** and press **Download the game (about 4.5 GB)**. Already have the Free Realms client? Choose the folder with FreeRealms.exe instead.
 
 **2.** Come back to **Play** and press **PLAY NOW!** The first time, the launcher downloads the server and checks every file, so give it a few minutes. Your first login makes your account.
 
 **3.** Want company? The **Host** tab sets up a realm for your friends, and the **Servers** tab lists realms you can join.
+
+### Here's how you can help
+Tell us what breaks! Open an issue on the Free Realms Expanded page on GitHub with what you did and what happened; a screenshot helps a lot. Old screenshots, videos and memories of where things stood help us put the world back together too.
 
 The **Get started** button at the bottom of the launcher has the full guide any time. Have fun!
 ";
