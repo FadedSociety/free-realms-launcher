@@ -81,7 +81,7 @@ bw_fishing_stream_Tile_000_000_2_3.dds,222996610,2176
 bw_fishing_uwdirt_bbe.dds,4060886949,349680
 bw_hedge_plant_02_lod0.dme,4144955044,11866
 bw_spire_01_lod0.dme,1409102661,40207
-bw_spires_01.cdt,3365410112,4036
+bw_spires_01.cdt,1615122255,4036
 bw_vine_wall_01.dds,2232514852,349680
 bw_vine_wall_01_lod0.dme,3301962412,94784
 caster_f_feet_maryjanewstalking_wizard-blue-L2_tint.dds,1227912137,21973
@@ -348,7 +348,7 @@ freestyle_m_shoulders_backpack_herbalist-basic-L1_tint.dds,2001363089,21973
 freestyle_m_shoulders_backpack_herbalist-plaid-L2_tint.dds,3673873221,21973
 freestyle_m_shoulders_backpack_herbalist-purple-L3_tint.dds,3264863853,21973
 freestyle_m_shoulders_donutbelt_adventurer-glazedsprinkles-P_tint.dds,4117152122,21973
-hsg_castle_interior_pillow_01.cdt,4241610592,3948
+hsg_castle_interior_pillow_01.cdt,247325343,3948
 hsg_castle_interior_pillow_01_lod0.dme,2012552074,4808
 hsg_pots_01_lod0.dme,243967239,6024
 human_m_facialhair_none.dme,1082278742,4515
@@ -444,7 +444,7 @@ sg_pir_shipwash_stump_spec_bbe.dds,2250821681,349680
 sg_soc_banner_bbe.dds,249693839,349680
 sg_soc_banner_post_bbe.dme,2796415689,9258
 sg_soc_bleachers_bbe.dme,243247727,75043
-sg_soc_field_bbec_103.cdt,3939273766,16084
+sg_soc_field_bbec_103.cdt,2990466691,16084
 sg_soc_flag_post_bbe.dme,2567882899,5669
 sg_soc_goal_bbe.dds,1294166320,262272
 sg_soc_goal_bbe.dme,4206579634,59581
@@ -484,10 +484,10 @@ ss_pir_shipwash_collossos.dme,512658495,30683
 ss_pir_shipwash_rock_bbe.dds,400392129,262272
 ss_pir_shipwash_shark.dme,2313500205,53810
 ss_pir_shipwash_shark_bbe.dds,3256733700,349680
-ss_pir_shipwash_skull.cdt,4135196304,15632
+ss_pir_shipwash_skull.cdt,1977776557,15632
 ss_pir_shipwash_skull.dds,140304108,349680
 ss_pir_shipwash_skull.dme,1725559193,29614
-ss_pir_shipwash_stump_bbe.cdt,2605716154,16464
+ss_pir_shipwash_stump_bbe.cdt,174967345,16464
 ss_pir_shipwash_stump_bbe.dme,3219342690,60505
 ss_pir_shipwash_sword.dme,3687680781,69967
 ss_pir_shipwash_sword_bbe.dds,2877575150,65664
